@@ -98,7 +98,12 @@ class FlashableBuilder:
             "",
             "flash_partition() {",
             '    src="$1"; dest="$2"; msg="$3"',
-            '    if [ -n "$msg" ]; then ui_print "$msg"; fi',
+            '    if [ "$#" -lt 3 ]; then',
+            '        partition_name=$(echo "$dest" | cut -d \'/\' -f 5)',
+            '        ui_print "- Flashing partition $partition_name"',
+            '    elif [ -n "$msg" ]; then',
+            '        ui_print "$msg"',
+            '    fi',
             '    unzip -p "$ZIPFILE" "$src" >"$dest" || {',
             '        ui_print "Error: Failed to flash $src to $dest"',
             '        exit 1',
@@ -109,20 +114,34 @@ class FlashableBuilder:
             '    src="$1"; dest="$2"',
             '    partition_name=$(echo "$dest" | cut -d \'/\' -f 5)',
             '    ui_print "- Flashing partition $partition_name"',
-            '    unzip -p "$ZIPFILE" "$src" | /tmp/META-INF/zstd -c -d >"$dest" || {',
+            '    unzip -p "$ZIPFILE" "$src" | /tmp/META-INF/zstd -c -d -T0 --no-check >"$dest" || {',
             '        ui_print "Error: Failed to flash compressed $src to $dest"',
             '        exit 1',
             '    }',
             "}",
             "",
-            "flash_firmware_both_slots() {",
+            "flash_partition_both_slots() {",
             '    img_file="$1"; base_name="$2"',
-            '    flash_partition "$img_file" "/dev/block/by-name/${base_name}_a" "- Flashing ${base_name} to both slots"',
-            '    flash_partition "$img_file" "/dev/block/by-name/${base_name}_b" ""',
+            '    if [ -e "/dev/block/by-name/${base_name}_a" ] || [ -e "/dev/block/by-name/${base_name}_b" ]; then',
+            '        flash_partition "$img_file" "/dev/block/by-name/${base_name}_a" "- Flashing partition ${base_name} to both slots"',
+            '        flash_partition "$img_file" "/dev/block/by-name/${base_name}_b" ""',
+            '    else',
+            '        flash_partition "$img_file" "/dev/block/by-name/${base_name}" "- Flashing partition ${base_name}"',
+            '    fi',
+            "}",
+            "",
+            "flash_partition_zstd_both_slots() {",
+            '    img_file="$1"; base_name="$2"',
+            '    if [ -e "/dev/block/by-name/${base_name}_a" ] || [ -e "/dev/block/by-name/${base_name}_b" ]; then',
+            '        flash_partition_zstd "$img_file" "/dev/block/by-name/${base_name}_a" "- Flashing partition ${base_name} to both slots"',
+            '        flash_partition_zstd "$img_file" "/dev/block/by-name/${base_name}_b" ""',
+            '    else',
+            '        flash_partition_zstd "$img_file" "/dev/block/by-name/${base_name}" "- Flashing partition ${base_name}"',
+            '    fi',
             "}",
             "",
             "getVolumeKey() {",
-            '    ui_print "- Press [+] for Yes and [-] for No"',
+            '    ui_print "- Listening to volume keys. Press [+] for \'Yes\' and [-] for \'No\'"',
             "    while true; do",
             '        keyInfo=$(getevent -qlc 1 | grep KEY_VOLUME)',
             '        [ -z "$keyInfo" ] && continue',
@@ -137,22 +156,25 @@ class FlashableBuilder:
             '    [ -z "$myDevice" ] && myDevice=$(getprop ro.product.name)',
             f'    romDevice="{codename}"',
             '    if [ -z "$(echo "$myDevice" | grep -i "$romDevice")" ]; then',
-            '        ui_print "- Warning: Target mismatch! Current: $myDevice, Expected: $romDevice"',
-            '        ui_print "- Do you wish to continue flashing?"',
-            '        if ! getVolumeKey; then ui_print "- Flashing aborted."; exit 1; fi',
+            '        ui_print "- Device code verification failed. Please double-check if this package matches your device model."',
+            '        ui_print "- Flashing the wrong package may cause bricking. Do you wish to continue flashing?"',
+            '        if ! getVolumeKey; then ui_print "- You chose to abort flashing."; exit 1;',
+            '        else ui_print "- You chose to continue flashing."; fi',
             '    fi',
             "}",
             "",
             "checkExit() {",
             '    status=$?',
             '    if [ "$status" -ne 0 ]; then',
-            '        ui_print "Error: Dynamic partition operation failed. Please flash stock super.img first."',
+            '        ui_print "Error: Exit status $status detected. There may be an issue with your super partition. Flash stock super.img first, then retry."',
             '        exit 1',
             '    fi',
             "}",
             "",
             "unmountPartitions() {",
-            '    umount /system /system_root /vendor /product /system_ext /vendor_dlkm /odm_dlkm /odm 2>/dev/null',
+            '    umount /system /system_root /vendor /product /system_ext /vendor_dlkm /odm_dlkm /odm \\',
+            '           /tr_carrier /tr_company /tr_mi /tr_preload /tr_product /tr_region /tr_theme \\',
+            '           /tr_manifest /tr_misc 2>/dev/null',
             "}",
             "",
             "manage_logical_partition() {",
@@ -170,8 +192,15 @@ class FlashableBuilder:
             'unzip -o "$ZIPFILE" META-INF/bin/* -d /tmp >/dev/null 2>&1',
             "chmod 0755 /tmp/META-INF/bin/* 2>/dev/null",
             "",
+            'ui_print " "',
+            'ui_print "  __  __      _                              "',
+            'ui_print " |  \\/  | ___| |__  _ __ __ _  __ _ _ __  "',
+            'ui_print " | |\\/| |/ _ \\ \'_ \\| \'__/ _` |/ _` | \'_ \\ "',
+            'ui_print " | |  | |  __/ | | | | | (_| | (_| | | | |"',
+            'ui_print " |_|  |_|\\___|_| |_|_|  \\__,_|\\__,_|_| |_|"',
+            'ui_print " "',
             'ui_print "============================================"',
-            'ui_print "Flashable ROM By Mehraan"',
+            'ui_print "         Flashable ROM By Mehraan"',
             f'ui_print "Device     : {device}"',
             f'ui_print "Codename   : {codename}"',
             f'ui_print "Version    : {firmware}"',
@@ -181,6 +210,7 @@ class FlashableBuilder:
             "checkDevice",
             "unmountPartitions",
             "",
+            'ui_print " "',
             'SLOT=$(getprop ro.boot.slot_suffix)',
             'ui_print "Checking boot slot... ${SLOT}"',
             'OTHER_SLOT="_a"',
@@ -191,20 +221,23 @@ class FlashableBuilder:
         ]
 
         if firmware_imgs:
+            sb.append('ui_print " "')
             sb.append('ui_print "Patching firmware to both slot..."')
             for fw in firmware_imgs:
-                sb.append(f'flash_firmware_both_slots "{fw}.img" "{fw}"')
+                sb.append(f'flash_partition_both_slots "{fw}.img" "{fw}"')
             sb.append("")
 
         if system_imgs:
+            sb.append('ui_print " "')
             sb.append('ui_print "Patching system..."')
             for sys_part in system_imgs:
-                sb.append(f'flash_partition "{sys_part}.img" "/dev/block/by-name/{sys_part}$SLOT" "- Flashing partition {sys_part}"')
+                sb.append(f'flash_partition_both_slots "{sys_part}.img" "{sys_part}"')
             sb.append("")
 
         # AVB 2.0 (vbmeta) snippet
         if vbmeta_option == "disable":
             sb.extend([
+                'ui_print " "',
                 'ui_print "- Configuring AVB 2.0 (Vbmeta)..."',
                 'AVB_BIN="/tmp/META-INF/bin/avbctl"',
                 '[ ! -f "$AVB_BIN" ] && AVB_BIN="avbctl"',
@@ -217,6 +250,7 @@ class FlashableBuilder:
             ])
         elif vbmeta_option == "enable":
             sb.extend([
+                'ui_print " "',
                 'ui_print "- Configuring AVB 2.0 (Vbmeta)..."',
                 'AVB_BIN="/tmp/META-INF/bin/avbctl"',
                 '[ ! -f "$AVB_BIN" ] && AVB_BIN="avbctl"',
@@ -230,10 +264,11 @@ class FlashableBuilder:
 
         all_super = [p[0] for p in super_specs] + [p[0] for p in tr_specs]
         if all_super:
+            sb.append('ui_print " "')
             sb.append('ui_print "Patching super partitions..."')
             for part in all_super:
-                sb.append(f'manage_logical_partition "clear" "{part}" "" "$SLOT"')
-                sb.append(f'manage_logical_partition "clear" "{part}" "" "$OTHER_SLOT"')
+                sb.append(f'manage_logical_partition "clear" "{part}" "" "_a"')
+                sb.append(f'manage_logical_partition "clear" "{part}" "" "_b"')
 
             for part, size in super_specs:
                 sb.append(f'manage_logical_partition "create" "{part}" "{size}" "$SLOT"')
@@ -255,6 +290,7 @@ class FlashableBuilder:
 
         sb.extend([
             "",
+            'ui_print " "',
             'ui_print "============================================"',
             'ui_print "ROM Installed Successfully!"',
             'ui_print "Flashing Script By Mehraan"',
