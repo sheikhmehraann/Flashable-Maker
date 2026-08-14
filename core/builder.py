@@ -321,7 +321,7 @@ class FlashableBuilder:
             "",
             'ui_print " "',
             'ui_print "============================================"',
-            'ui_print "ROM Installed Successfully!"',
+            'ui_print "Flashed Successfully!"',
             'ui_print "Flashing Script By Mehraan"',
             'ui_print "============================================"',
             "exit 0"
