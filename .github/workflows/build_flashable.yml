@@ -8,34 +8,34 @@ on:
         required: true
         type: string
       device_name:
-        description: 'Device Name (e.g. POCO F3, Xiaomi 11T, Redmi Note 12)'
+        description: 'Device Name'
         required: true
-        default: 'POCO F3'
+        default: 'Infinix GT 20 Pro'
         type: string
       device_codename:
-        description: 'Device Codename (e.g. alioth, agate, tapas)'
+        description: 'Device Codename'
         required: true
-        default: 'alioth'
+        default: 'X6871'
         type: string
       rom_version:
-        description: 'ROM Version / Firmware Tag (e.g. v1.0.0-Stable, 16.0.3)'
+        description: 'ROM Version'
         required: true
-        default: 'v1.0.0-Stable'
+        default: '15.1.2.180SP05'
         type: string
       maintainer:
-        description: 'Maintainer / Script Author'
+        description: 'Maintainer'
         required: true
         default: 'Mehraan'
         type: string
       vbmeta_option:
-        description: 'AVB 2.0 / Vbmeta Option (Built into script, no extra zips)'
+        description: 'AVB 2.0 / Vbmeta Option'
         required: true
         type: choice
         options:
+          - 'skip'
           - 'disable'
           - 'enable'
-          - 'skip'
-        default: 'disable'
+        default: 'skip'
       compression_format:
         description: 'Partition Compression Format'
         required: true
@@ -46,7 +46,7 @@ on:
           - 'erofs'
         default: 'zstd'
       zstd_level:
-        description: 'ZSTD Compression Level (1-19, default: 9)'
+        description: 'ZSTD Compression Level'
         required: true
         default: '9'
         type: string
@@ -55,57 +55,38 @@ on:
         required: false
         type: boolean
         default: true
-      upload_target:
-        description: 'Upload Target for Output ZIP'
-        required: true
-        type: choice
-        options:
-          - 'go_file'
-          - 'github_release'
-          - 'transfer_sh'
-          - 'all'
-        default: 'go_file'
 
 jobs:
   build:
-    name: Build Flashable Package
+    name: Fast Flashable Builder
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
-      - name: Checkout Flashable-Engine Repository
+      - name: Checkout Flashable-Engine
         uses: actions/checkout@v4
 
-      - name: Setup Python Environment
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install System Dependencies
+      - name: Install High-Speed Dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq \
-            aria2 \
-            p7zip-full \
-            zstd \
-            libarchive-tools \
-            libfuse2 \
-            curl \
-            wget
+          sudo apt-get install -y -qq aria2 zstd libarchive-tools curl
 
-      - name: Install Python Dependencies
+      - name: Install Python Requirements
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Set Tool Executable Permissions
+      - name: Set Tool Permissions
         run: |
           chmod -R +x bin/host/ || true
           chmod -R +x bin/device/ || true
 
-      - name: Run Master Build Pipeline
+      - name: Run Build Pipeline & Upload to Gofile
         id: build_step
         run: |
           FASTBOOT_FLAG=""
@@ -122,43 +103,6 @@ jobs:
             --vbmeta "${{ github.event.inputs.vbmeta_option }}" \
             --compression "${{ github.event.inputs.compression_format }}" \
             --zstd-level "${{ github.event.inputs.zstd_level }}" \
+            --upload "gofile" \
             --output "./output" \
             $FASTBOOT_FLAG
-
-      - name: Upload Output Artifact to GitHub Workflow
-        uses: actions/upload-artifact@v4
-        with:
-          name: Flashable-ROM-${{ github.event.inputs.device_codename }}-${{ github.event.inputs.rom_version }}
-          path: output/*
-          retention-days: 7
-
-      - name: Publish GitHub Release
-        if: ${{ github.event.inputs.upload_target == 'github_release' || github.event.inputs.upload_target == 'all' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.inputs.rom_version }}-${{ github.event.inputs.device_codename }}
-          name: "Flashable Package: ${{ github.event.inputs.device_name }} (${{ github.event.inputs.rom_version }})"
-          body: |
-            ### 🚀 Flashable ROM Package Build
-            - **Device:** ${{ github.event.inputs.device_name }} (`${{ github.event.inputs.device_codename }}`)
-            - **Version:** ${{ github.event.inputs.rom_version }}
-            - **Maintainer:** ${{ github.event.inputs.maintainer }}
-            - **Vbmeta Mode:** `${{ github.event.inputs.vbmeta_option }}`
-            - **Compression:** `${{ github.event.inputs.compression_format }}` (Level ${{ github.event.inputs.zstd_level }})
-            - **Fastboot Included:** `${{ github.event.inputs.include_fastboot }}`
-            
-            *Generated automatically by Flashable-Engine via GitHub Actions.*
-          files: output/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload to Gofile.io
-        if: ${{ github.event.inputs.upload_target == 'go_file' || github.event.inputs.upload_target == 'all' }}
-        run: |
-          python -c "from core.uploader import CloudUploader; from pathlib import Path; [CloudUploader.upload_gofile(p) for p in Path('output').glob('*.zip')]"
-
-      - name: Upload to Transfer.sh
-        if: ${{ github.event.inputs.upload_target == 'transfer_sh' || github.event.inputs.upload_target == 'all' }}
-        run: |
-          python -c "from core.uploader import CloudUploader; from pathlib import Path; [CloudUploader.upload_transfersh(p) for p in Path('output').glob('*.zip')]"
-
