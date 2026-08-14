@@ -162,7 +162,7 @@ def main():
     if output_path.is_dir() or str(args.output).endswith(("/", "\\")) or not str(args.output).endswith(".zip"):
         output_path.mkdir(parents=True, exist_ok=True)
         clean_ver = args.version.replace(" ", "_").replace("/", "-")
-        out_zip = str(output_path / f"{clean_ver}-{args.codename}-Flashable-By-Mehraan.zip")
+        out_zip = str(output_path / f"{args.codename}-{clean_ver}-recovery-ab.zip")
     else:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         out_zip = str(output_path)
