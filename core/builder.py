@@ -45,6 +45,7 @@ class FlashableBuilder:
         maintainer: str = "Mehraan",
         vbmeta_option: str = "disable",
         compression: str = "zstd",
+        zstd_level: int = 9,
         include_fastboot: bool = True,
         bin_dir: Optional[Path] = None,
         output_dir: str = "./output"
@@ -55,6 +56,7 @@ class FlashableBuilder:
         self.maintainer = maintainer
         self.vbmeta_option = vbmeta_option
         self.compression = compression
+        self.zstd_level = zstd_level
         self.include_fastboot = include_fastboot
 
         self.root_dir = Path(__file__).resolve().parent.parent
@@ -194,12 +196,13 @@ class FlashableBuilder:
         return final_zip_path
 
     def _compress_zstd(self, src: Path, dest: Path):
-        """Compresses using host zstd binary or python module."""
+        """Compresses using host zstd binary with specified compression level and multithreading."""
         host_zstd = self.bin_dir / "host" / "zstd"
+        level_arg = f"-{self.zstd_level}"
         if host_zstd.exists() and os.access(host_zstd, os.X_OK):
-            subprocess.run([str(host_zstd), "-T0", "-15", "-q", str(src), "-o", str(dest)], check=True)
+            subprocess.run([str(host_zstd), "-T0", level_arg, "-q", str(src), "-o", str(dest)], check=True)
         elif shutil.which("zstd"):
-            subprocess.run(["zstd", "-T0", "-15", "-q", str(src), "-o", str(dest)], check=True)
+            subprocess.run(["zstd", "-T0", level_arg, "-q", str(src), "-o", str(dest)], check=True)
         else:
             shutil.copy2(src, dest.with_suffix(""))
 

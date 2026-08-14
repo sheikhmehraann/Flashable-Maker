@@ -22,6 +22,7 @@ if hasattr(sys.stderr, "reconfigure"):
 from core.downloader import UniversalDownloader
 from core.extractor import RomExtractor
 from core.builder import FlashableBuilder
+from core.uploader import CloudUploader
 
 
 def main():
@@ -69,6 +70,21 @@ def main():
     )
 
     parser.add_argument(
+        "--zstd-level",
+        type=int,
+        default=9,
+        help="ZSTD compression level (1-19, default: 9)"
+    )
+
+    parser.add_argument(
+        "--upload",
+        type=str,
+        choices=["none", "gofile", "transfersh", "all"],
+        default="none",
+        help="Automatically upload final ZIP to cloud host (gofile, transfersh, all)"
+    )
+
+    parser.add_argument(
         "--no-fastboot",
         action="store_true",
         help="Do not include PC Fastboot scripts in the flashable zip"
@@ -97,8 +113,10 @@ def main():
     print(f" • Device      : {args.device} ({args.codename})")
     print(f" • Version     : {args.version}")
     print(f" • VBmeta Mode : {args.vbmeta.upper()}")
-    print(f" • Compression : {args.compression.upper()}")
+    print(f" • Compression : {args.compression.upper()} (Level {args.zstd_level})")
     print(f" • Fastboot    : {'Enabled' if not args.no_fastboot else 'Disabled'}")
+    if args.upload != "none":
+        print(f" • Cloud Upload: {args.upload.upper()}")
     print("=" * 65 + "\n")
 
     workspace = Path(args.workspace).resolve()
@@ -128,6 +146,7 @@ def main():
         maintainer=args.maintainer,
         vbmeta_option=args.vbmeta,
         compression=args.compression,
+        zstd_level=args.zstd_level,
         include_fastboot=(not args.no_fastboot),
         output_dir=str(output_dir)
     )
@@ -138,6 +157,12 @@ def main():
     print("               BUILD PROCESS COMPLETED!")
     print(f"  Flashable ZIP : {final_zip}")
     print("═" * 65 + "\n")
+
+    # Step 3: Cloud Upload (if requested)
+    if args.upload in ["gofile", "all"]:
+        CloudUploader.upload_gofile(final_zip)
+    if args.upload in ["transfersh", "all"]:
+        CloudUploader.upload_transfersh(final_zip)
 
     # Set GitHub Actions output variable if in CI
     github_output = os.environ.get("GITHUB_OUTPUT")

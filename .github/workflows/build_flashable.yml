@@ -45,6 +45,11 @@ on:
           - 'raw'
           - 'erofs'
         default: 'zstd'
+      zstd_level:
+        description: 'ZSTD Compression Level (1-19, default: 9)'
+        required: true
+        default: '9'
+        type: string
       include_fastboot:
         description: 'Include PC Fastboot Flasher (Windows .bat & Linux .sh)'
         required: false
@@ -55,11 +60,11 @@ on:
         required: true
         type: choice
         options:
+          - 'go_file'
           - 'github_release'
           - 'transfer_sh'
-          - 'go_file'
           - 'all'
-        default: 'github_release'
+        default: 'go_file'
 
 jobs:
   build:
@@ -116,6 +121,7 @@ jobs:
             --maintainer "${{ github.event.inputs.maintainer }}" \
             --vbmeta "${{ github.event.inputs.vbmeta_option }}" \
             --compression "${{ github.event.inputs.compression_format }}" \
+            --zstd-level "${{ github.event.inputs.zstd_level }}" \
             --output "./output" \
             $FASTBOOT_FLAG
 
@@ -138,7 +144,7 @@ jobs:
             - **Version:** ${{ github.event.inputs.rom_version }}
             - **Maintainer:** ${{ github.event.inputs.maintainer }}
             - **Vbmeta Mode:** `${{ github.event.inputs.vbmeta_option }}`
-            - **Compression:** `${{ github.event.inputs.compression_format }}`
+            - **Compression:** `${{ github.event.inputs.compression_format }}` (Level ${{ github.event.inputs.zstd_level }})
             - **Fastboot Included:** `${{ github.event.inputs.include_fastboot }}`
             
             *Generated automatically by Flashable-Engine via GitHub Actions.*
@@ -146,25 +152,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload to Transfer.sh
-        if: ${{ github.event.inputs.upload_target == 'transfer_sh' || github.event.inputs.upload_target == 'all' }}
-        run: |
-          for file in output/*.zip; do
-            echo "Uploading $file to transfer.sh..."
-            URL=$(curl -s --upload-file "$file" "https://transfer.sh/$(basename "$file")")
-            echo "Transfer.sh Download Link: $URL"
-            echo "### 📦 Transfer.sh Mirror: $URL" >> $GITHUB_STEP_SUMMARY
-          done
-
       - name: Upload to Gofile.io
         if: ${{ github.event.inputs.upload_target == 'go_file' || github.event.inputs.upload_target == 'all' }}
         run: |
-          SERVER=$(curl -s https://api.gofile.io/servers | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4)
-          [ -z "$SERVER" ] && SERVER="store1"
-          for file in output/*.zip; do
-            echo "Uploading $file to Gofile server $SERVER..."
-            RESP=$(curl -s -F "file=@$file" "https://${SERVER}.gofile.io/contents/uploadfile")
-            LINK=$(echo "$RESP" | grep -o '"downloadPage":"[^"]*"' | cut -d'"' -f4)
-            echo "Gofile Download Link: $LINK"
-            echo "### 📦 Gofile Mirror: $LINK" >> $GITHUB_STEP_SUMMARY
-          done
+          python -c "from core.uploader import CloudUploader; from pathlib import Path; [CloudUploader.upload_gofile(p) for p in Path('output').glob('*.zip')]"
+
+      - name: Upload to Transfer.sh
+        if: ${{ github.event.inputs.upload_target == 'transfer_sh' || github.event.inputs.upload_target == 'all' }}
+        run: |
+          python -c "from core.uploader import CloudUploader; from pathlib import Path; [CloudUploader.upload_transfersh(p) for p in Path('output').glob('*.zip')]"
+
