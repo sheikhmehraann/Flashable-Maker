@@ -110,15 +110,15 @@ class UniversalDownloader:
         print(f"[DOWNLOADER] Target File  : {target_name}")
         print(f"[DOWNLOADER] Active Mirrors: {len(mirrors)}")
 
-        # Strategy A: aria2c (multi-threaded, 16 connections per server across all mirrors)
+        # Strategy A: aria2c (multi-threaded, 16 connections, 0 disk allocation delay)
         if self.has_aria2:
-            print(f"[DOWNLOADER] Multi-thread accelerator active (16 parallel streams per mirror)...")
+            print(f"[DOWNLOADER] Multi-thread accelerator active (16 parallel streams)...")
             cmd = [
                 "aria2c",
-                "--console-log-level=warn",
+                "--console-log-level=notice",
                 "--summary-interval=1",
                 "--max-connection-per-server=16",
-                "--split=32",
+                "--split=16",
                 "--min-split-size=1M",
                 "--stream-piece-selector=geom",
                 "--file-allocation=none",
@@ -126,13 +126,10 @@ class UniversalDownloader:
                 "--allow-overwrite=true",
                 "--check-certificate=false",
                 '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                f"--dir={self.output_dir}"
+                f"--dir={self.output_dir}",
+                f"--out={target_name}",
+                direct_url
             ]
-            if target_name:
-                cmd.append(f"--out={target_name}")
-
-            # Add all mirror URLs
-            cmd.extend(mirrors)
 
             res = subprocess.run(cmd)
             if res.returncode == 0:
