@@ -229,7 +229,7 @@ class FlashableBuilder:
             "",
             'ui_print " "',
             'SLOT=$(getprop ro.boot.slot_suffix)',
-            'ui_print "Checking boot slot... ${SLOT}"',
+            'ui_print "Checking boot slot: ${SLOT}"',
             'OTHER_SLOT="_a"',
             '[ "$SLOT" = "_a" ] && OTHER_SLOT="_b"',
             "lptools clear-cow",
@@ -239,7 +239,7 @@ class FlashableBuilder:
 
         if firmware_imgs:
             sb.append('ui_print " "')
-            sb.append('ui_print "Patching firmware to both slot..."')
+            sb.append('ui_print "Patching firmware to both slots"')
             for fw in firmware_imgs:
                 if use_zstd:
                     sb.append(f'flash_partition_zstd_both_slots "{fw}.img.zst" "{fw}"')
@@ -249,7 +249,7 @@ class FlashableBuilder:
 
         if system_imgs:
             sb.append('ui_print " "')
-            sb.append('ui_print "Patching system..."')
+            sb.append('ui_print "Patching system"')
             for sys_part in system_imgs:
                 if use_zstd:
                     sb.append(f'flash_partition_zstd_both_slots "{sys_part}.img.zst" "{sys_part}"')
@@ -261,26 +261,26 @@ class FlashableBuilder:
         if vbmeta_option == "disable":
             sb.extend([
                 'ui_print " "',
-                'ui_print "- Configuring AVB 2.0 (Vbmeta)..."',
+                'ui_print "- Configuring AVB 2.0 (Vbmeta)"',
                 'AVB_BIN="/tmp/META-INF/bin/avbctl"',
                 '[ ! -f "$AVB_BIN" ] && AVB_BIN="avbctl"',
                 'if [ -f "$AVB_BIN" ] || which avbctl >/dev/null 2>&1; then',
                 '    $AVB_BIN --force disable-verity >/dev/null 2>&1 || true',
                 '    $AVB_BIN --force disable-verification >/dev/null 2>&1 || true',
-                '    ui_print "  - AVB Status : Disabled [dm-verity & verification OFF]"',
+                '    ui_print "  - AVB Status : Disabled"',
                 'fi',
                 ""
             ])
         elif vbmeta_option == "enable":
             sb.extend([
                 'ui_print " "',
-                'ui_print "- Configuring AVB 2.0 (Vbmeta)..."',
+                'ui_print "- Configuring AVB 2.0 (Vbmeta)"',
                 'AVB_BIN="/tmp/META-INF/bin/avbctl"',
                 '[ ! -f "$AVB_BIN" ] && AVB_BIN="avbctl"',
                 'if [ -f "$AVB_BIN" ] || which avbctl >/dev/null 2>&1; then',
                 '    $AVB_BIN --force enable-verity >/dev/null 2>&1 || true',
                 '    $AVB_BIN --force enable-verification >/dev/null 2>&1 || true',
-                '    ui_print "  - AVB Status : Enabled [Strict Verification ON]"',
+                '    ui_print "  - AVB Status : Enabled"',
                 'fi',
                 ""
             ])
@@ -288,7 +288,7 @@ class FlashableBuilder:
         all_super = [p[0] for p in super_specs] + [p[0] for p in tr_specs]
         if all_super:
             sb.append('ui_print " "')
-            sb.append('ui_print "Patching super partitions..."')
+            sb.append('ui_print "Patching super partitions"')
             for part in all_super:
                 sb.append(f'manage_logical_partition "clear" "{part}" "" "_a"')
                 sb.append(f'manage_logical_partition "clear" "{part}" "" "_b"')
