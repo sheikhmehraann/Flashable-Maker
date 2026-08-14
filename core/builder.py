@@ -267,7 +267,7 @@ class FlashableBuilder:
                 'if [ -f "$AVB_BIN" ] || which avbctl >/dev/null 2>&1; then',
                 '    $AVB_BIN --force disable-verity >/dev/null 2>&1 || true',
                 '    $AVB_BIN --force disable-verification >/dev/null 2>&1 || true',
-                '    ui_print "  • AVB Status : Disabled [dm-verity & verification OFF]"',
+                '    ui_print "  - AVB Status : Disabled [dm-verity & verification OFF]"',
                 'fi',
                 ""
             ])
@@ -280,7 +280,7 @@ class FlashableBuilder:
                 'if [ -f "$AVB_BIN" ] || which avbctl >/dev/null 2>&1; then',
                 '    $AVB_BIN --force enable-verity >/dev/null 2>&1 || true',
                 '    $AVB_BIN --force enable-verification >/dev/null 2>&1 || true',
-                '    ui_print "  • AVB Status : Enabled [Strict Verification ON]"',
+                '    ui_print "  - AVB Status : Enabled [Strict Verification ON]"',
                 'fi',
                 ""
             ])
@@ -479,14 +479,14 @@ class FlashableBuilder:
             maintainer=maintainer, vbmeta_option=vbmeta_option, use_zstd=use_zstd
         )
         update_binary_path = os.path.join(meta_dir, "update-binary")
-        with open(update_binary_path, "w", newline="\n") as f:
+        with open(update_binary_path, "w", encoding="utf-8", newline="\n") as f:
             f.write(update_binary_content)
         try:
             os.chmod(update_binary_path, 0o755)
         except OSError:
             pass
 
-        with open(os.path.join(meta_dir, "updater-script"), "w", newline="\n") as f:
+        with open(os.path.join(meta_dir, "updater-script"), "w", encoding="utf-8", newline="\n") as f:
             f.write("# Dummy updater-script\n")
 
         # Native packaging
