@@ -50,20 +50,26 @@ class UniversalDownloader:
             elif not url.endswith("/download"):
                 direct_url = url.rstrip("/") + "/download"
             else:
-                direct_url = url
-            return direct_url, None, None
-
         # 3. MediaFire Links (e.g. mediafire.com/file/<KEY>/<NAME>/file)
         if "mediafire.com" in url:
             direct_url = self._resolve_mediafire(url)
             return direct_url, None, None
 
+        # 3. SourceForge Redirects
+        if "sourceforge.net" in url:
+            clean_url = url.split("?")[0]
+            parts = [p for p in clean_url.split("/") if p and p != "download"]
+            fname = parts[-1] if parts and ("." in parts[-1]) else None
+            return url, fname, None
+
         # 4. GitHub Release Direct or Raw
         if "github.com" in url and "/releases/download/" in url:
-            return url, None, None
+            fname = url.split("/")[-1].split("?")[0]
+            return url, fname, None
 
         # Default direct URL
-        return url, None, None
+        parsed_name = Path(urllib.parse.urlparse(url).path).name
+        return url, parsed_name if parsed_name else None, None
 
     def _resolve_mediafire(self, page_url: str) -> str:
         """Scrapes direct download link from MediaFire landing page."""
@@ -84,12 +90,12 @@ class UniversalDownloader:
 
     def download(self, url: str, custom_filename: Optional[str] = None) -> Path:
         """
-        Executes download using aria2c (fastest) with automatic fallbacks.
+        Executes download using aria2c (fastest) or curl with automatic fallbacks.
         Returns the absolute path to the downloaded file.
         """
         print(f"\n[DOWNLOADER] Initializing download for: {url}")
         direct_url, resolved_name, headers = self.resolve_url(url)
-        target_name = custom_filename or resolved_name
+        target_name = custom_filename or resolved_name or "downloaded_package.bin"
 
         # Strategy A: aria2c (multi-threaded, 16 connections)
         if self.has_aria2:
@@ -118,9 +124,20 @@ class UniversalDownloader:
                     print(f"[DOWNLOADER] Download Complete: {downloaded_file.name} ({downloaded_file.stat().st_size:,} bytes)")
                     return downloaded_file
 
-            print("[DOWNLOADER] aria2c failed or was interrupted, attempting Python stream fallback...")
+            print("[DOWNLOADER] aria2c failed or was interrupted, attempting curl fallback...")
 
-        # Strategy B: Python Requests Stream fallback
+        # Strategy B: curl (high speed, follows redirects)
+        if shutil.which("curl"):
+            dest_path = self.output_dir / target_name
+            print(f"[DOWNLOADER] Downloading with curl ({dest_path.name})...")
+            cmd = ["curl", "-L", "-k", "--fail", "--progress-bar", "--retry", "3", "-o", str(dest_path), direct_url]
+            res = subprocess.run(cmd)
+            if res.returncode == 0 and dest_path.exists() and dest_path.stat().st_size > 1024:
+                print(f"[DOWNLOADER] Download Complete: {dest_path.name} ({dest_path.stat().st_size:,} bytes)")
+                return dest_path
+            print("[DOWNLOADER] curl encountered an issue, attempting Python stream fallback...")
+
+        # Strategy C: Python Requests Stream fallback
         return self._download_python_stream(direct_url, target_name)
 
     def _download_python_stream(self, url: str, target_name: Optional[str] = None) -> Path:

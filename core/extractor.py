@@ -103,8 +103,18 @@ class RomExtractor:
                 z.extractall(dest_dir)
 
     def _unpack_tar(self, tar_path: Path, dest_dir: Path):
-        """Unpacks TAR / TAR.MD5 / TGZ images."""
+        """Unpacks TAR / TAR.MD5 / TGZ / TAR.ZST images using native tar CLI or tarfile."""
         print(f"[EXTRACTOR] Unpacking TAR archive: {tar_path.name}...")
+        if shutil.which("tar"):
+            cmd = ["tar", "-xf", str(tar_path), "-C", str(dest_dir)]
+            res = subprocess.run(cmd)
+            if res.returncode == 0:
+                return
+        if shutil.which("7z"):
+            cmd = ["7z", "x", "-y", f"-o{dest_dir}", str(tar_path)]
+            res = subprocess.run(cmd)
+            if res.returncode == 0:
+                return
         with tarfile.open(tar_path, 'r:*') as t:
             t.extractall(dest_dir)
 
