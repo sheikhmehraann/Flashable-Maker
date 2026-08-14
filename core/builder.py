@@ -352,7 +352,10 @@ class FlashableBuilder:
         """
         abs_output = os.path.abspath(output_zip)
         if os.path.exists(abs_output):
-            os.remove(abs_output)
+            try:
+                os.remove(abs_output)
+            except OSError:
+                pass
 
         print(f"[*] [ZIP Packaging] Building final package (Compression Level {zip_level}): {output_zip}")
 

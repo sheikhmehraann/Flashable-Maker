@@ -9,6 +9,7 @@ from typing import Optional, Dict, List
 class ResolvedURL:
     """Dataclass holding resolved direct download information."""
     direct_url: str
+    original_url: str = ""
     filename: Optional[str] = None
     file_size: Optional[int] = None
     headers: Dict[str, str] = field(default_factory=dict)

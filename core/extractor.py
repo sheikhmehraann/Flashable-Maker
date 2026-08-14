@@ -100,11 +100,28 @@ class PartitionExtractor:
 
     @classmethod
     def extract_single(cls, archive_path: str, extract_dir: str):
-        """Native multi-threaded single archive unpacker."""
+        """Native multi-threaded single archive unpacker supporting any container format."""
         os.makedirs(extract_dir, exist_ok=True)
         lower_name = archive_path.lower()
 
-        if lower_name.endswith((".tar.zst", ".tzst")):
+        # Sniff magic header bytes
+        magic = b""
+        if os.path.isfile(archive_path) and os.path.getsize(archive_path) >= 6:
+            try:
+                with open(archive_path, "rb") as mf:
+                    magic = mf.read(6)
+            except OSError:
+                pass
+
+        is_zstd = magic.startswith(b"\x28\xb5\x2f\xfd") or lower_name.endswith((".tar.zst", ".tzst", ".zst"))
+        is_zip = magic.startswith(b"PK\x03\x04") or lower_name.endswith(".zip")
+        is_7z = magic.startswith(b"7z\xbc\xaf\x27\x1c") or lower_name.endswith(".7z")
+        is_rar = magic.startswith(b"Rar!\x1a\x07") or lower_name.endswith(".rar")
+        is_gzip = magic.startswith(b"\x1f\x8b") or lower_name.endswith((".tar.gz", ".tgz", ".gz"))
+        is_bzip2 = magic.startswith(b"BZh") or lower_name.endswith((".tar.bz2", ".tbz2", ".bz2"))
+        is_xz = magic.startswith(b"\xfd7zXZ\x00") or lower_name.endswith((".tar.xz", ".txz", ".xz"))
+
+        if is_zstd:
             unpacked = False
             # Pass 1: native tar with zstd decompressor
             if shutil.which("tar"):
@@ -128,25 +145,60 @@ class PartitionExtractor:
 
             # Pass 3: Python zstandard + tarfile
             if not unpacked:
-                import tarfile
-                import zstandard
-                dctx = zstandard.ZstdDecompressor()
-                with open(archive_path, "rb") as ifh, dctx.stream_reader(ifh) as reader:
-                    with tarfile.open(fileobj=reader, mode="r|") as tar:
-                        tar.extractall(path=extract_dir)
+                try:
+                    import tarfile
+                    import zstandard
+                    dctx = zstandard.ZstdDecompressor()
+                    with open(archive_path, "rb") as ifh, dctx.stream_reader(ifh) as reader:
+                        with tarfile.open(fileobj=reader, mode="r|") as tar:
+                            tar.extractall(path=extract_dir)
+                    unpacked = True
+                except Exception:
+                    pass
 
-        elif shutil.which("7z"):
-            subprocess.run(["7z", "x", "-mmt=on", "-y", f"-o{extract_dir}", archive_path], stdout=subprocess.DEVNULL, check=True)
-        elif shutil.which("unzip") and lower_name.endswith(".zip"):
-            subprocess.run(["unzip", "-q", "-o", archive_path, "-d", extract_dir], check=True)
-        elif lower_name.endswith((".tar.gz", ".tgz", ".tar.xz", ".tar.bz2", ".tar")):
-            import tarfile
-            with tarfile.open(archive_path, "r:*") as t:
-                t.extractall(extract_dir)
+        elif is_7z or is_rar:
+            if shutil.which("7z"):
+                subprocess.run(["7z", "x", "-mmt=on", "-y", f"-o{extract_dir}", archive_path], stdout=subprocess.DEVNULL, check=True)
+            else:
+                try:
+                    import py7zr
+                    with py7zr.SevenZipFile(archive_path, mode='r') as z:
+                        z.extractall(path=extract_dir)
+                except Exception:
+                    pass
+
+        elif is_zip:
+            if shutil.which("7z"):
+                subprocess.run(["7z", "x", "-mmt=on", "-y", f"-o{extract_dir}", archive_path], stdout=subprocess.DEVNULL, check=True)
+            elif shutil.which("unzip"):
+                subprocess.run(["unzip", "-q", "-o", archive_path, "-d", extract_dir], check=True)
+            else:
+                import zipfile
+                with zipfile.ZipFile(archive_path, "r") as z:
+                    z.extractall(extract_dir)
+
+        elif is_gzip or is_bzip2 or is_xz or lower_name.endswith(".tar"):
+            if shutil.which("tar"):
+                try:
+                    subprocess.run(["tar", "-xf", archive_path, "-C", extract_dir], check=True)
+                except Exception:
+                    import tarfile
+                    with tarfile.open(archive_path, "r:*") as t:
+                        t.extractall(extract_dir)
+            else:
+                import tarfile
+                with tarfile.open(archive_path, "r:*") as t:
+                    t.extractall(extract_dir)
         else:
-            import zipfile
-            with zipfile.ZipFile(archive_path, "r") as z:
-                z.extractall(extract_dir)
+            if shutil.which("7z"):
+                subprocess.run(["7z", "x", "-mmt=on", "-y", f"-o{extract_dir}", archive_path], stdout=subprocess.DEVNULL, check=True)
+            else:
+                try:
+                    import zipfile
+                    with zipfile.ZipFile(archive_path, "r") as z:
+                        z.extractall(extract_dir)
+                except Exception:
+                    pass
 
     @classmethod
     def extract_recursive(cls, initial_archive: str, extract_dir: str, max_depth: int = 5):

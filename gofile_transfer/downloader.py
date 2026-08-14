@@ -51,16 +51,41 @@ class ParallelDownloader:
             except Exception:
                 pass
 
-        # 2. Multi-threaded range request engine (Python fallback)
+        # 2. Try native curl/curl.exe acceleration
+        if shutil.which("curl.exe") or shutil.which("curl"):
+            try:
+                success = self._download_curl(resolved.direct_url, output_path, resolved.headers, resolved.cookies)
+                if success and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                    return output_path
+            except Exception:
+                pass
+
+        # 3. Multi-threaded range request engine (Python fallback)
         file_size = resolved.file_size
         supports_ranges = resolved.supports_ranges and file_size and file_size > (1 * 1024 * 1024)
 
         if supports_ranges and self.num_connections > 1:
-            self._download_parallel(resolved, output_path, file_size, progress_callback)
+            try:
+                self._download_parallel(resolved, output_path, file_size, progress_callback)
+            except Exception:
+                self._download_single(resolved, output_path, progress_callback)
         else:
             self._download_single(resolved, output_path, progress_callback)
 
         return output_path
+
+    def _download_curl(self, direct_url: str, output_path: str, headers: dict, cookies: dict) -> bool:
+        """Download via native curl/curl.exe."""
+        curl_bin = "curl.exe" if shutil.which("curl.exe") else "curl"
+        cmd = [curl_bin, "-L", "-s", "-k", "-o", output_path]
+        for k, v in headers.items():
+            cmd.extend(["-H", f"{k}: {v}"])
+        if cookies:
+            cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
+            cmd.extend(["-H", f"Cookie: {cookie_str}"])
+        cmd.append(direct_url)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        return res.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
 
     def _download_aria2(self, direct_url: str, output_dir: str, filename: str) -> bool:
         """Download via native aria2c with researched optimal production flags."""
@@ -90,30 +115,20 @@ class ParallelDownloader:
         return res.returncode == 0
 
     def _download_single(self, resolved: ResolvedURL, output_path: str, progress_callback: Optional[Callable[[int, int], None]] = None):
-        """Single-stream download with 2MB buffer."""
+        """Single-stream download with requests."""
+        import requests
         headers = resolved.headers.copy()
-
-        with httpx.Client(follow_redirects=True, timeout=60.0, cookies=resolved.cookies) as client:
-            with client.stream("GET", resolved.direct_url, headers=headers) as response:
-                response.raise_for_status()
-                total_size = int(response.headers.get("Content-Length", 0)) or resolved.file_size or 0
-
-                with open(output_path, "wb") as f, Progress(
-                    TextColumn("[bold cyan]{task.description}"),
-                    BarColumn(),
-                    DownloadColumn(),
-                    TransferSpeedColumn(),
-                    TimeRemainingColumn(),
-                ) as progress:
-                    task = progress.add_task(f"Downloading {os.path.basename(output_path)}", total=total_size)
-                    downloaded = 0
-                    for chunk in response.iter_bytes(chunk_size=self.chunk_size):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            progress.update(task, completed=downloaded)
-                            if progress_callback:
-                                progress_callback(downloaded, total_size)
+        with requests.get(resolved.direct_url, headers=headers, cookies=resolved.cookies, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            total_size = int(r.headers.get("Content-Length", 0)) or resolved.file_size or 0
+            downloaded = 0
+            with open(output_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=self.chunk_size):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if progress_callback:
+                            progress_callback(downloaded, total_size)
 
     def _download_parallel(self, resolved: ResolvedURL, output_path: str, file_size: int, progress_callback: Optional[Callable[[int, int], None]] = None):
         """Multi-threaded range request download with parallel workers and pre-allocated disk writes."""

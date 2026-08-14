@@ -134,7 +134,7 @@ class GoogleDriveResolver(BaseResolver):
             except ValueError:
                 pass
 
-        supports_ranges = final_res.headers.get("Accept-Ranges") == "bytes"
+        supports_ranges = False
 
         return ResolvedURL(
             original_url=url,

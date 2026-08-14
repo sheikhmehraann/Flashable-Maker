@@ -36,6 +36,13 @@ class FastDownloader:
         if resolved.file_size:
             print(f"[+] [Downloader] Payload Size    : {resolved.file_size / (1024*1024):.2f} MB")
 
+        # Preserve remote extension if custom filename lacks one
+        if resolved.filename and "." in resolved.filename and "." not in filename:
+            remote_ext = "".join(Path(resolved.filename).suffixes)
+            filename = f"{filename}{remote_ext}"
+        elif resolved.filename and not filename:
+            filename = resolved.filename
+
         downloader = ParallelDownloader(num_connections=max_connections)
         downloaded_file = downloader.download(
             resolved=resolved,
