@@ -68,22 +68,13 @@ class AvbManager:
         Executes avbctl seamlessly during recovery installation without any external zip.
         """
         if self.mode == "skip":
-            return """
-# AVB 2.0 / Vbmeta State: Skipped (Original Bootloader & System integrity preserved)
-ui_print " "
+            return """# AVB 2.0 / Vbmeta State: Skipped
 ui_print "- Skipping AVB / Vbmeta modification (kept as-is)"
 """
 
         if self.mode == "disable":
-            return """
-# =========================================================
-# AVB 2.0 / Vbmeta Control: DISABLE (dm-verity & verification)
-# =========================================================
-ui_print " "
-ui_print " ╔══════════════════════════════════════════════╗ "
-ui_print " ║        Configuring Android Verified Boot     ║ "
-ui_print " ╚══════════════════════════════════════════════╝ "
-
+            return """# AVB 2.0 / Vbmeta Control: DISABLE
+ui_print "- Configuring AVB 2.0 (Vbmeta)..."
 AVB_BIN="/system/bin/avbctl"
 if [ ! -f "$AVB_BIN" ]; then
     if [ -f "/sbin/avbctl" ]; then
@@ -96,35 +87,22 @@ if [ ! -f "$AVB_BIN" ]; then
 fi
 
 if [ -f "$AVB_BIN" ]; then
-    ui_print "- Checking current AVB vbmeta status..."
     VERITY_STAT=$($AVB_BIN get-verity 2>/dev/null || echo "unknown")
-    VERIF_STAT=$($AVB_BIN get-verification 2>/dev/null || echo "unknown")
-    ui_print "  • Verity       : $VERITY_STAT"
-    ui_print "  • Verification : $VERIF_STAT"
-    
     if echo "$VERITY_STAT" | grep -qi "disabled"; then
-        ui_print "- AVB vbmeta is already disabled."
+        ui_print "  • AVB Status : Already Disabled [dm-verity OFF]"
     else
-        ui_print "- Disabling AVB 2.0 verity & verification..."
         $AVB_BIN --force disable-verity >/dev/null 2>&1 || true
         $AVB_BIN --force disable-verification >/dev/null 2>&1 || true
-        ui_print "  • Status: Successfully Disabled"
+        ui_print "  • AVB Status : Disabled [dm-verity & verification OFF]"
     fi
 else
-    ui_print "[WARNING] avbctl binary not found in recovery. Skipping AVB flag override."
+    ui_print "  • AVB Status : Preserved (avbctl not in recovery)"
 fi
 """
 
         if self.mode == "enable":
-            return """
-# =========================================================
-# AVB 2.0 / Vbmeta Control: ENABLE (dm-verity & verification)
-# =========================================================
-ui_print " "
-ui_print " ╔══════════════════════════════════════════════╗ "
-ui_print " ║        Configuring Android Verified Boot     ║ "
-ui_print " ╚══════════════════════════════════════════════╝ "
-
+            return """# AVB 2.0 / Vbmeta Control: ENABLE
+ui_print "- Configuring AVB 2.0 (Vbmeta)..."
 AVB_BIN="/system/bin/avbctl"
 if [ ! -f "$AVB_BIN" ]; then
     if [ -f "/sbin/avbctl" ]; then
@@ -137,10 +115,10 @@ if [ ! -f "$AVB_BIN" ]; then
 fi
 
 if [ -f "$AVB_BIN" ]; then
-    ui_print "- Enabling AVB 2.0 verity & verification..."
     $AVB_BIN --force enable-verity >/dev/null 2>&1 || true
     $AVB_BIN --force enable-verification >/dev/null 2>&1 || true
-    ui_print "  • Status: Successfully Enabled"
+    ui_print "  • AVB Status : Enabled [Strict Verification ON]"
 fi
 """
+        return ""
         return ""

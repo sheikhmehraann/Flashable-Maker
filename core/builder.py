@@ -367,35 +367,25 @@ chmod 0755 /tmp/META-INF/bin/* 2>/dev/null
         # Firmware Flashing
         if [ "{len(found_firmware)}" -gt "0" ]; then
             ui_print " "
-            ui_print " ┌──────────────────────────────────────────────┐ "
-            ui_print " │  [*] Phase 1: Flashing Firmware Blocks       │ "
-            ui_print " └──────────────────────────────────────────────┘ "
+            ui_print "- Flashing firmware partitions..."
 {fw_flash_lines}
         fi
 
         # Boot & Kernel Images
         if [ "{len(found_boot)}" -gt "0" ]; then
             ui_print " "
-            ui_print " ┌──────────────────────────────────────────────┐ "
-            ui_print " │  [*] Phase 2: Flashing Boot & Kernel Images  │ "
-            ui_print " └──────────────────────────────────────────────┘ "
+            ui_print "- Flashing boot & kernel images..."
 {boot_flash_lines}
         fi
 
         # AVB / VBMETA Handling (Built-in Script Routine)
         ui_print " "
-        ui_print " ┌──────────────────────────────────────────────┐ "
-        ui_print " │  [*] Phase 3: Android Verified Boot (AVB)    │ "
-        ui_print " └──────────────────────────────────────────────┘ "
 {avb_snippet}
 
         # Dynamic Super Partitions
         if [ "{len(found_super)}" -gt "0" ]; then
             ui_print " "
-            ui_print " ┌──────────────────────────────────────────────┐ "
-            ui_print " │  [*] Phase 4: Dynamic Super Partitions       │ "
-            ui_print " └──────────────────────────────────────────────┘ "
-            ui_print "- Provisioning logical dynamic partitions..."
+            ui_print "- Provisioning dynamic partitions (super)..."
 {super_clear_lines}
 {super_create_lines}
 {super_map_lines}
