@@ -59,13 +59,20 @@ class RomExtractor:
             self._stage_partition_files(archive_path)
             return self.staging_dir
 
-        if archive_path.name.lower() == "payload.bin":
+        name_lower = archive_path.name.lower()
+        if name_lower == "payload.bin" or name_lower.endswith(".bin"):
             self._extract_payload_bin(archive_path, self.raw_dir)
-        elif archive_path.suffix.lower() in [".zip", ".7z", ".rar"]:
-            self._unpack_archive(archive_path, self.raw_dir)
-        elif archive_path.suffix.lower() in [".tar", ".md5", ".tgz"]:
+        elif name_lower.endswith((".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.bz2", ".tbz2", ".tar.zst", ".tar", ".md5")):
             self._unpack_tar(archive_path, self.raw_dir)
-        elif archive_path.suffix.lower() == ".img":
+        elif name_lower.endswith((".zip", ".7z", ".rar", ".apk", ".jar")):
+            self._unpack_archive(archive_path, self.raw_dir)
+        elif name_lower.endswith(".gz") and not name_lower.endswith(".tar.gz"):
+            self._unpack_single_gz(archive_path, self.raw_dir)
+        elif name_lower.endswith(".xz") and not name_lower.endswith(".tar.xz"):
+            self._unpack_single_xz(archive_path, self.raw_dir)
+        elif name_lower.endswith(".zst") and not name_lower.endswith(".tar.zst"):
+            self._unpack_single_zst(archive_path, self.raw_dir)
+        elif name_lower.endswith(".img") or name_lower.endswith(".raw"):
             if "super" in archive_path.stem.lower():
                 self._unpack_super_img(archive_path, self.raw_dir)
             else:
@@ -96,10 +103,41 @@ class RomExtractor:
                 z.extractall(dest_dir)
 
     def _unpack_tar(self, tar_path: Path, dest_dir: Path):
-        """Unpacks TAR / TAR.MD5 images (e.g. Odin / Samsung packages)."""
+        """Unpacks TAR / TAR.MD5 / TGZ images."""
         print(f"[EXTRACTOR] Unpacking TAR archive: {tar_path.name}...")
         with tarfile.open(tar_path, 'r:*') as t:
             t.extractall(dest_dir)
+
+    def _unpack_single_gz(self, gz_path: Path, dest_dir: Path):
+        """Decompresses standalone .gz (e.g. system.img.gz)."""
+        import gzip
+        out_name = gz_path.stem
+        out_path = dest_dir / out_name
+        print(f"[EXTRACTOR] Decompressing GZ: {gz_path.name} -> {out_name}...")
+        with gzip.open(gz_path, 'rb') as f_in, open(out_path, 'wb') as f_out:
+            shutil.copyfileobj(f_in, f_out)
+
+    def _unpack_single_xz(self, xz_path: Path, dest_dir: Path):
+        """Decompresses standalone .xz (e.g. system.img.xz)."""
+        import lzma
+        out_name = xz_path.stem
+        out_path = dest_dir / out_name
+        print(f"[EXTRACTOR] Decompressing XZ: {xz_path.name} -> {out_name}...")
+        with lzma.open(xz_path, 'rb') as f_in, open(out_path, 'wb') as f_out:
+            shutil.copyfileobj(f_in, f_out)
+
+    def _unpack_single_zst(self, zst_path: Path, dest_dir: Path):
+        """Decompresses standalone .zst (e.g. system.img.zst)."""
+        out_name = zst_path.stem
+        out_path = dest_dir / out_name
+        print(f"[EXTRACTOR] Decompressing ZSTD: {zst_path.name} -> {out_name}...")
+        host_zstd = self.bin_dir / "zstd"
+        if host_zstd.exists() and os.access(host_zstd, os.X_OK):
+            subprocess.run([str(host_zstd), "-d", "-q", str(zst_path), "-o", str(out_path)], check=True)
+        elif shutil.which("zstd"):
+            subprocess.run(["zstd", "-d", "-q", str(zst_path), "-o", str(out_path)], check=True)
+        else:
+            shutil.copy2(zst_path, out_path)
 
     def _extract_payload_bin(self, payload_path: Path, dest_dir: Path):
         """Dumps partitions from payload.bin using payload-extract binary."""
