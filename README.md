@@ -130,7 +130,7 @@ You can build 10GB+ flashable ROM packages entirely in the cloud **without downl
 
 | Input Parameter | Description | Default / Example |
 | :--- | :--- | :--- |
-| **`rom_url`** | Direct download link (Google Drive, SourceForge, MediaFire, Direct Link) | `https://drive.google.com/file/d/...` |
+| **`rom_url`** | Direct link to **Images Archive** (`.zip`, `.rar`, `.7z`, `.tar.zst` containing `.img` files - Google Drive, SourceForge, Direct Link) | `https://drive.google.com/file/d/...` |
 | **`device_name`** | Full Device Marketing Name | `Infinix GT 20 Pro` |
 | **`device_codename`** | Hardware Board Codename | `X6871` |
 | **`rom_version`** | ROM / Firmware Version String | `15.1.2.180SP05OP001PF001AZ` |
@@ -215,7 +215,7 @@ python main.py \
 
 | Option | Flag | Description |
 | :--- | :--- | :--- |
-| **Source URL** | `--url <URL>` | Download from SourceForge, Google Drive, MediaFire, or Direct HTTPS |
+| **Images URL** | `--url <URL>` | Direct download link to Images Archive (`.zip`, `.rar`, `.7z`, `.tar.zst` containing `.img` files) |
 | **Local File** | `--file <PATH>` | Input local archive (`.zip`, `.tar.zst`, `.7z`, `payload.bin`, etc.) |
 | **Local Directory** | `--rom-dir <PATH>` | Input directory containing extracted `.img` or `.img.zst` files |
 | **Device Name** | `--device <STR>` | Target device marketing name (e.g. `Infinix GT 20 Pro`) |

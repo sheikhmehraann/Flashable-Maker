@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       rom_url:
-        description: 'Downloadable ROM Link (Google Drive, SourceForge, MediaFire, Direct URL, GitHub Release)'
+        description: 'Images Archive Link (.zip, .rar, .7z, .tar.zst containing .img files - Google Drive, SourceForge, Direct Link)'
         required: true
         type: string
       device_name:
