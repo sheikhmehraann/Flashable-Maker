@@ -1,177 +1,227 @@
-# 🚀 Flashable-Engine
+# ⚡ Flashable-Engine
 
-> **Universal Cloud & Local Flashable ROM Maker Engine**  
-> *Flashing Scripts & Architecture By **Mehraan***
+<div align="center">
 
-Automated Android ROM Flashable Package Builder with **GitHub Actions Server CI/CD integration**, high-speed multi-threaded cloud downloading (Google Drive, SourceForge, MediaFire, Direct links), dynamic partition recreation, and **built-in AVB 2.0 / Vbmeta controls** (no extra zips needed).
+```
+============================================
+         Flashing Script By Mehraan
+============================================
+
+Device: Infinix GT 20 Pro
+Codename: X6871
+Version: 15.1.2.180SP05OP001PF001AZ
+Maintainer: Mehraan
+============================================
+```
+
+**The Universal, High-Performance Android Flashable ROM Package Maker**  
+*Next-Gen Native Pipeline • Zero-Copy • Both-Slots Flashing • Smart AVB 2.0 Controls • Instant Cloud Upload*
+
+---
+
+[![GitHub Actions](https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-blue?logo=githubactions&logoColor=white)](https://github.com/sheikhmehraann/Flashable-Maker/actions)
+[![Python Version](https://img.shields.io/badge/Python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-brightgreen?logo=python&logoColor=white)](https://python.org)
+[![Compression](https://img.shields.io/badge/Compression-Zstandard%20v1.5.6%20(Level%200--22)-orange?logo=zstandard&logoColor=white)](https://facebook.github.io/zstd/)
+[![Platform](https://img.shields.io/badge/Platform-Android%20A%2FB%20%7C%20Dynamic%20Partitions-purple?logo=android&logoColor=white)](https://source.android.com)
+[![Maintainer](https://img.shields.io/badge/Maintainer-Mehraan-cyan)](https://github.com/sheikhmehraann)
+
+</div>
 
 ---
 
 ## 🌟 Key Features
 
-- ⚡ **GitHub Actions Server Automation**: Build 5GB+ custom ROM flashable packages in minutes on GitHub cloud runners without consuming your local bandwidth or CPU.
-- 📥 **Universal Multi-Threaded Downloader**: Accelerated downloads using `aria2c` (16 parallel connections) supporting:
-  - **Google Drive** (Auto large-file token confirmation)
-  - **SourceForge** (Direct mirror CDN scraper)
-  - **MediaFire** (Direct link resolution)
-  - **GitHub Releases / Direct HTTP/HTTPS URLs**
-- 🛡️ **Integrated AVB 2.0 / Vbmeta Options (Built-in Script)**:
-  - `disable`: Automatically disables dm-verity and verification flags directly inside the recovery `update-binary` using embedded `avbctl`. **No separate vbmeta ZIPs required.**
-  - `enable`: Re-enables strict Android Verified Boot.
-  - `skip`: Preserves stock/original vbmeta flags untouched.
-- 🎨 **Aesthetic Monospace Recovery Console UI**:
-  - Centered `Flashing Script By Mehraan` box-lining banner designed for flawless rendering in TWRP, OrangeFox, PBRP, and Lineage Recovery.
-- 🗜️ **High-Throughput Compression**:
-  - Multi-threaded `zstd -T0` parallel compression for dynamic partitions (`system`, `vendor`, `product`, etc.).
-  - On-the-fly streaming decompression straight to `/dev/block/mapper/*` via embedded `zstd-arm64`.
-- 💻 **Dual-Mode Hybrid Package**:
-  - Ready-to-flash **Recovery ZIP** + PC **Fastboot Flasher** (`windows_flash.bat` & `linux_flash.sh` with bundled fastboot binaries).
+- ⚡ **10GB ROMs in Seconds**: Multi-core parallel ZSTD compression pipeline paired with direct stream-decompression to block devices at **>1.8 GB/s** during flashing.
+- 🔄 **Both-Slots Flashing Engine**: Automatically discovers and flashes all slotted partitions (`boot`, `vendor_boot`, `init_boot`, `lk`, `logo`, `dtbo`, `vbmeta`, `system`, `vendor`, etc.) to **both slots (`_a` and `_b`)** to prevent hard bricks.
+- 🔍 **Dynamic Block Device Discovery**: Universal `find_block_device()` resolver searching across `/dev/block/by-name`, `/dev/block/bootdevice/by-name`, and `/dev/block/platform/*/by-name` ensuring 100% compatibility across **MediaTek, Qualcomm, Samsung Exynos, and Unisoc**.
+- 🛡️ **Intelligent AVB 2.0 / Vbmeta Controls**:
+  - `enable`: Ensures AVB strict verification is enabled. If already enabled on the device, reports `Already Enabled (Skipped)`.
+  - `disable`: Disables dm-verity and verification. If already disabled, reports `Already Disabled (Skipped)`.
+  - `skip`: Omits AVB configuration and keeps stock vbmeta intact with zero binary overhead.
+- 🗜️ **Universal Recursive Extraction**: Automatically extracts and flattens any archive format (`.tar.zst`, `.zip`, `.7z`, `.rar`, `.tar.gz`, `.tar.xz`, `payload.bin`, `super.img`) containing partition images.
+- ☁️ **Turbo GoFile.io Cloud Integration**: Native high-speed upload powered by `gofile-fast-link-transfer` returning instant, publicly accessible download links.
+- 🤖 **1-Click GitHub Actions CI/CD**: Build multi-gigabyte custom ROM packages directly in the cloud from any remote download URL without using your local bandwidth or CPU.
+- 🎨 **Clean Monospace Recovery Interface**: Minimalist, professional console output designed for TWRP, OrangeFox, PBRP, and Lineage Recovery.
+
+---
+
+## 📱 Live Recovery Flashing UI
+
+When flashing the generated package in custom recovery, users receive this clean, real-time output:
+
+```text
+============================================
+         Flashing Script By Mehraan
+============================================
+
+Device: Infinix GT 20 Pro
+Codename: X6871
+Version: 15.1.2.180SP05OP001PF001AZ
+Maintainer: Mehraan
+============================================
+ 
+- Target Device    : Verified X6871
+- Active Boot Slot : Slot A
+ 
+Patching firmware to both slots
+- Flashing partition lk to both slots
+- Flashing partition logo to both slots
+ 
+Patching system
+- Flashing partition boot to both slots
+ 
+- Configuring AVB 2.0 (Vbmeta)
+  - AVB Status : Already Enabled (Skipped)
+ 
+============================================
+           Flashed Successfully!
+============================================
+```
 
 ---
 
 ## 📂 Repository Structure
 
 ```text
-Flashable-Engine/
-├── .github/
-│   └── workflows/
-│       └── build_flashable.yml    # Complete GitHub Actions Cloud CI/CD workflow
-├── bin/
-│   ├── device/                    # ARM64 device binaries embedded into flashable zips
-│   │   ├── avbctl                 # Native Android Verified Boot controller
-│   │   ├── zstd-arm64             # ARM64 high-speed decompression binary
-│   │   ├── lptools                # Dynamic partition manager
-│   │   ├── lpmake                 # Super image metadata generator
-│   │   └── lpdump                 # Logical partition table dumper
-│   ├── host/                      # Statically-compiled x86_64 Linux tools
-│   │   ├── payload-extract        # Rust-based high-speed payload.bin dumper
-│   │   ├── ota_extractor          # Official AOSP payload unpacker
-│   │   ├── lpunpack               # Super.img unpacker
-│   │   ├── extract.erofs / mkfs   # Modern EROFS rootfs utilities
-│   │   ├── simg2img               # Sparse image converter
-│   │   └── zstd                   # Multi-threaded host compressor
-│   └── fastboot/                  # Standalone PC Fastboot flasher binaries (Win/Linux)
-├── core/
-│   ├── downloader.py              # Universal 16-thread cloud downloader
-│   ├── extractor.py               # Smart ROM, Payload, and Super extractor
-│   ├── avb_manager.py             # AVB 2.0 & Vbmeta script logic & image patcher
-│   └── builder.py                 # Master Flashable ZIP & Fastboot builder
-├── config/
-│   └── build_config.example.json  # Device & build profile configuration
-├── main.py                        # Unified CLI entry point
-├── requirements.txt               # Python dependencies
-└── README.md
+Flashable-Maker/
+└── Flashable-Engine/
+    ├── .github/
+    │   └── workflows/
+    │       └── build_flashable.yml    # 1-Click Cloud CI/CD Pipeline
+    ├── bin/
+    │   ├── device/                    # ARM64 recovery helper binaries
+    │   │   ├── avbctl                 # Native Android Verified Boot controller
+    │   │   ├── lptools                # Dynamic partition manager
+    │   │   ├── lpmake                 # Super image metadata builder
+    │   │   └── lpdump                 # Dynamic partition table dumper
+    │   └── zstd-arm64                 # Ultra-compact static ARM64 decompressor
+    ├── core/
+    │   ├── builder.py                 # Flashable ZIP builder & script generator
+    │   ├── downloader.py              # Multi-connection parallel downloader
+    │   └── extractor.py               # Recursive multi-archive unpacker
+    ├── gofile_transfer/               # High-throughput GoFile.io upload engine
+    │   ├── resolvers/                 # Link resolvers (GDrive, SourceForge, MediaFire)
+    │   ├── downloader.py              # 16-connection aria2c engine
+    │   └── uploader.py                # Turbo GoFile upload client
+    ├── main.py                        # Unified CLI Entry Point
+    ├── requirements.txt               # Python package dependencies
+    └── README.md
 ```
 
 ---
 
-## ☁️ How to Build via GitHub Actions (Cloud Server)
+## ☁️ How to Build via GitHub Actions (Cloud)
 
-1. **Push this repository to GitHub** (Public or Private):
-   ```bash
-   git init
-   git add .
-   git commit -m "Initialize Flashable-Engine by Mehraan"
-   git remote add origin https://github.com/YOUR_USERNAME/Flashable-Engine.git
-   git push -u origin main
-   ```
+1. Open your repository on GitHub: [`Flashable-Maker`](https://github.com/sheikhmehraann/Flashable-Maker).
+2. Go to the **Actions** tab.
+3. Select **"Build Flashable ROM Package (Flashable-Engine)"** from the left sidebar.
+4. Click **"Run workflow"** and fill in the parameters:
 
-2. **Open the "Actions" tab** in your GitHub repository.
-3. Select **"Build Flashable ROM Package"** from the left sidebar.
-4. Click **"Run workflow"** and provide the parameters:
-
-| Input Field | Description | Example |
+| Input | Description | Default / Example |
 | :--- | :--- | :--- |
-| **`rom_url`** | Download link to your ROM archive / payload.bin | `https://drive.google.com/file/d/...` |
-| **`device_name`** | Full name of the target device | `POCO F3` |
-| **`device_codename`** | Device hardware codename | `alioth` |
-| **`rom_version`** | Firmware or ROM version string | `v1.0.0-Stable` |
-| **`maintainer`** | Author / Maintainer name | `Mehraan` |
-| **`vbmeta_option`** | AVB action (`disable`, `enable`, or `skip`) | `disable` |
-| **`compression_format`** | Compression algorithm (`zstd`, `raw`, `erofs`) | `zstd` |
-| **`include_fastboot`** | Include PC Fastboot flasher scripts | `true` |
-| **`upload_target`** | Where to upload the output ZIP | `github_release` / `transfer_sh` / `all` |
+| `rom_url` | Direct URL to ROM (SourceForge, GDrive, Direct Link) | `https://downloads.sourceforge.net/...` |
+| `device_name` | Full Device Marketing Name | `Infinix GT 20 Pro` |
+| `device_codename` | Hardware Board Codename | `X6871` |
+| `rom_version` | ROM / Firmware Version String | `15.1.2.180SP05OP001PF001AZ` |
+| `maintainer` | Package Maintainer Name | `Mehraan` |
+| `vbmeta_option` | AVB 2.0 Action (`enable`, `disable`, `skip`) | `enable` |
+| `zstd_level` | ZSTD Compression Level (`0` to `22`) | `22` (Ultra-Max) |
+| `zip_level` | ZIP Deflate Level (`0` = Store, `9` = Max) | `9` |
 
-5. Click **"Run workflow"**. The GitHub runner will download, unpack, process AVB flags, compress, and publish your flashable ZIP artifact to GitHub Releases!
+5. Click **"Run workflow"**. When completed, the workflow summary will display your **GoFile download link** and file statistics!
 
 ---
 
-## 💻 How to Run Locally (CLI)
+## 💻 Local Installation & Usage
 
-### 1. Installation
+### 1. Requirements
+- Python 3.9+
+- `aria2`, `zstd`, `p7zip-full`, `libarchive-tools`, `curl`
+
+#### Linux (Ubuntu/Debian):
 ```bash
+sudo apt update && sudo apt install -y aria2 zstd p7zip-full libarchive-tools curl python3-pip
 pip install -r requirements.txt
 ```
 
-### 2. Building from a Download URL
+#### Windows:
+Make sure Python is installed and added to PATH. Install dependencies:
+```powershell
+pip install -r requirements.txt
+```
+
+---
+
+### 2. Command-Line Examples
+
+#### A. Build from Local Images Directory:
 ```bash
 python main.py \
-  --url "https://sourceforge.net/projects/sample/files/rom.zip/download" \
-  --device "POCO F3" \
-  --codename "alioth" \
-  --version "v1.0.0-Stable" \
+  --rom-dir "C:\Path\To\My-imgs" \
+  --device "Infinix GT 20 Pro" \
+  --codename "X6871" \
+  --version "15.1.2.180SP05OP001PF001AZ" \
   --maintainer "Mehraan" \
-  --vbmeta "disable" \
-  --compression "zstd" \
+  --vbmeta "enable" \
+  --zstd-level 22 \
+  --zip-level 9 \
+  --output "C:\Path\To\Output"
+```
+
+#### B. Build from Local Archive (`.zip`, `.tar.zst`, `payload.bin`):
+```bash
+python main.py \
+  --file "C:\Path\To\rom_dump.tar.zst" \
+  --device "Infinix GT 20 Pro" \
+  --codename "X6871" \
+  --version "15.1.2.180SP05OP001PF001AZ" \
+  --maintainer "Mehraan" \
+  --vbmeta "enable" \
+  --zstd-level 22 \
   --output "./output"
 ```
 
-### 3. Building from a Local Extracted ROM Folder
+#### C. Build from Remote URL + Auto-Upload to GoFile:
 ```bash
 python main.py \
-  --rom-dir "./my_extracted_rom" \
-  --device "Xiaomi 11T" \
-  --codename "agate" \
-  --version "HyperOS-1.0.4" \
+  --url "https://direct-link.com/rom_package.zip" \
+  --device "Infinix GT 20 Pro" \
+  --codename "X6871" \
+  --version "15.1.2.180SP05OP001PF001AZ" \
   --maintainer "Mehraan" \
-  --vbmeta "skip"
+  --vbmeta "enable" \
+  --zstd-level 22 \
+  --zip-level 9 \
+  --upload "gofile" \
+  --output "./output"
 ```
 
 ---
 
-## 📱 Recovery Console Preview (Rama Style)
+## 🛠️ CLI Flags Reference
 
-When the generated package is flashed in TWRP / OrangeFox, it renders:
-
-```text
-============================================
-Flashable ROM By Mehraan
-Device     : POCO F3
-Codename   : alioth
-Version    : v1.0.0-Stable
-Maintainer : Mehraan
-============================================
-
-Checking boot slot... _a
-
-Patching firmware to both slot...
-- Flashing partition modem to both slots
-- Flashing partition dsp to both slots
-- Flashing partition bluetooth to both slots
-- Flashing partition tz to both slots
-- Flashing partition xbl to both slots
-
-Patching system...
-- Flashing partition boot to both slots
-- Flashing partition dtbo to both slots
-- Flashing partition vendor_boot to both slots
-- Flashing partition vbmeta to both slots
-
-- Configuring AVB 2.0 (Vbmeta)...
-  • AVB Status : Disabled [dm-verity & verification OFF]
-
-Patching super partitions...
-- Flashing partition system
-- Flashing partition vendor
-- Flashing partition product
-
-============================================
-ROM Installed Successfully!
-Flashing Script By Mehraan
-============================================
-```
+| Option | Flag | Description |
+| :--- | :--- | :--- |
+| **Source URL** | `--url <URL>` | Download from SourceForge, Google Drive, MediaFire, or Direct HTTPS |
+| **Local File** | `--file <PATH>` | Input local archive (`.zip`, `.tar.zst`, `.7z`, `payload.bin`, etc.) |
+| **Local Directory** | `--rom-dir <PATH>` | Input directory containing extracted `.img` or `.img.zst` files |
+| **Device Name** | `--device <STR>` | Target device marketing name (e.g. `Infinix GT 20 Pro`) |
+| **Codename** | `--codename <STR>` | Device board codename (e.g. `X6871`) |
+| **Version** | `--version <STR>` | Firmware / ROM version string |
+| **Maintainer** | `--maintainer <STR>` | Maintainer or author name (Default: `Mehraan`) |
+| **AVB Vbmeta** | `--vbmeta <MODE>` | `enable` (default), `disable`, or `skip` |
+| **ZSTD Level** | `--zstd-level <0-22>` | `0` = raw pass-through, `1` = ultra-fast, `22` = maximum compression |
+| **ZIP Level** | `--zip-level <0-9>` | `0` = store mode (line rate speed), `9` = maximum deflate compression |
+| **Cloud Upload** | `--upload <TARGET>` | `none` (default) or `gofile` |
+| **Output Path** | `--output <PATH>` | Destination directory or output `.zip` file path |
 
 ---
 
-## ⚖️ License
-Created with ❤️ by **Mehraan**. Free for custom ROM developers and maintainers.
+## 📜 Credits & License
+
+- **Flashing Script & Architecture**: **Mehraan** ([@sheikhmehraann](https://github.com/sheikhmehraann))
+- **Dynamic Partition Management**: Powered by AOSP `lptools` & `avbctl`
+- **Compression Engine**: Facebook Zstandard (`zstd`)
+- **Cloud Upload Engine**: `gofile-fast-link-transfer`
+
+Licensed under the **Apache 2.0 License**. Free for personal and community ROM development.
