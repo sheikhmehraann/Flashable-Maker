@@ -76,32 +76,28 @@ def write_github_output(key: str, value: str):
         except Exception as e:
             sys.stderr.write(f"[!] Warning: Could not write to $GITHUB_OUTPUT: {e}\n")
 
-def main():
-    parser = argparse.ArgumentParser(description="Streaming Gofile Uploader")
-    parser.add_argument("filepath", help="Path to file to upload")
-    parser.add_argument("--token", default=None, help="Gofile API token (optional)")
-    args = parser.parse_args()
+def upload_file_cli(filepath: str, token: Optional[str] = None) -> Optional[str]:
+    """Reusable API to stream file to Gofile and return download link."""
+    if not os.path.isfile(filepath):
+        sys.stderr.write(f"[!] Error: File does not exist: '{filepath}'\n")
+        return None
 
-    if not os.path.isfile(args.filepath):
-        sys.stderr.write(f"[!] Error: File does not exist: '{args.filepath}'\n")
-        sys.exit(1)
-
-    file_size_mb = os.path.getsize(args.filepath) / (1024 * 1024)
+    file_size_mb = os.path.getsize(filepath) / (1024 * 1024)
     print(f"[*] Resolving optimal Gofile upload server...")
-    server = get_optimal_server(token=args.token)
+    server = get_optimal_server(token=token)
     print(f"[+] Upload target: https://{server}.gofile.io/contents/uploadfile")
-    print(f"[*] Streaming '{args.filepath}' ({file_size_mb:.2f} MB)...")
+    print(f"[*] Streaming '{filepath}' ({file_size_mb:.2f} MB)...")
 
     try:
-        res = upload_streaming_curl(args.filepath, server, token=args.token)
+        res = upload_streaming_curl(filepath, server, token=token)
     except Exception as e:
         sys.stderr.write(f"[!] Upload error: {e}\n")
-        sys.exit(1)
+        return None
 
     if res.get("status") == "ok":
         download_page = res.get("data", {}).get("downloadPage")
         file_id = res.get("data", {}).get("fileId")
-        print(f"\n[🚀 SUCCESS] Upload completed successfully!")
+        print(f"\n[+] [SUCCESS] Upload completed successfully!")
         print(f"   Download Page: {download_page}")
         print(f"   File ID      : {file_id}\n")
 
@@ -109,8 +105,19 @@ def main():
             write_github_output("download_page", download_page)
         if file_id:
             write_github_output("file_id", file_id)
+        return download_page
     else:
         sys.stderr.write(f"[!] Upload returned non-OK status: {json.dumps(res, indent=2)}\n")
+        return None
+
+def main():
+    parser = argparse.ArgumentParser(description="Streaming Gofile Uploader")
+    parser.add_argument("filepath", help="Path to file to upload")
+    parser.add_argument("--token", default=None, help="Gofile API token (optional)")
+    args = parser.parse_args()
+
+    link = upload_file_cli(args.filepath, token=args.token)
+    if not link:
         sys.exit(1)
 
 if __name__ == "__main__":
