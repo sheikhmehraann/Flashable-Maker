@@ -45,22 +45,21 @@ class UniversalDownloader:
 
         # 2. SourceForge Links (e.g. sourceforge.net/projects/.../files/.../download)
         if "sourceforge.net" in url:
+            clean_url = url.split("?")[0]
+            parts = [p for p in clean_url.split("/") if p and p != "download"]
+            fname = parts[-1] if parts and ("." in parts[-1]) else None
             if not url.endswith("/download") and not "files" in url:
                 direct_url = url.rstrip("/") + "/files/latest/download"
             elif not url.endswith("/download"):
                 direct_url = url.rstrip("/") + "/download"
             else:
+                direct_url = url
+            return direct_url, fname, None
+
         # 3. MediaFire Links (e.g. mediafire.com/file/<KEY>/<NAME>/file)
         if "mediafire.com" in url:
             direct_url = self._resolve_mediafire(url)
             return direct_url, None, None
-
-        # 3. SourceForge Redirects
-        if "sourceforge.net" in url:
-            clean_url = url.split("?")[0]
-            parts = [p for p in clean_url.split("/") if p and p != "download"]
-            fname = parts[-1] if parts and ("." in parts[-1]) else None
-            return url, fname, None
 
         # 4. GitHub Release Direct or Raw
         if "github.com" in url and "/releases/download/" in url:
