@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Flashable-Engine: Master Automation Pipeline
-Unified CLI tool for local builds and GitHub Actions CI/CD workflows.
-
-Usage:
-  python main.py --url "https://drive.google.com/..." --device "POCO F3" --codename "alioth" --version "16.0.3" --vbmeta disable
-  python main.py --rom-dir "./my_extracted_rom" --device "Xiaomi 11T" --codename "agate" --vbmeta skip
+⚡ main.py - Ultra-Fast Flashable ROM Maker Engine ⚡
+Flashing Script By Mehraan
+Zero-Copy Pass-Through | Multi-Core Zstandard (Level 0-22) | Native Multi-Thread STORE Packaging
+Converts 10GB+ ROM dumps, archives (.tar.zst, .zip, .7z), payload.bin, or super.img into flashables in seconds.
 """
 
 import os
@@ -19,157 +18,163 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from core.downloader import UniversalDownloader
-from core.extractor import RomExtractor
+from core.downloader import FastDownloader
+from core.extractor import PartitionExtractor
 from core.builder import FlashableBuilder
-from core.uploader import CloudUploader
+from gofile_upload import upload_file_cli
+
+
+def print_banner(maintainer="Mehraan"):
+    print("╔═════════════════════════════════════════════════════════════════════════╗")
+    print("║ ⚡ FLASHABLE ROM MAKER ENGINE (ULTRA-FAST NATIVE PIPELINE) ⚡             ║")
+    print(f"║ Flashing Script By {maintainer:<12} | Zero-Copy | Multi-Thread Packaging      ║")
+    print("╚═════════════════════════════════════════════════════════════════════════╝\n")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Flashable-Engine: Advanced Android ROM Flashable Package Builder",
+        description="Ultra-Fast Flashable ROM Maker Engine - Flashing Script By Mehraan",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "--url", "-u",
+    # Input sources (URL, local archive file, or local folder)
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument(
+        "--url", "--imgs-url", "-u",
+        dest="url",
         type=str,
-        help="Download URL (Google Drive, SourceForge, MediaFire, Mega, Direct HTTP/HTTPS, GitHub Release)"
+        help="Downloadable ROM archive link (SourceForge, Google Drive, MediaFire, Direct HTTP/HTTPS)"
     )
-    group.add_argument(
-        "--rom-dir", "-d",
-        type=str,
-        help="Path to an existing local folder containing ROM images / dumps"
-    )
-    group.add_argument(
+    input_group.add_argument(
         "--file", "-f",
+        dest="file",
         type=str,
-        help="Path to a local ROM archive or payload.bin file"
+        help="Path to local archive (.tar.zst, .zip, .7z, .tgz, payload.bin, super.img)"
+    )
+    input_group.add_argument(
+        "--rom-dir", "--imgs-dir", "-d",
+        dest="rom_dir",
+        type=str,
+        help="Path to local directory containing partition images (.img or .img.zst)"
     )
 
-    parser.add_argument("--device", type=str, default="POCO F3", help="Target Device Name")
-    parser.add_argument("--codename", type=str, default="alioth", help="Device Codename (e.g. alioth, agate, marble)")
-    parser.add_argument("--version", type=str, default="v1.0.0-Stable", help="ROM / Firmware Version")
+    # Device Metadata
+    parser.add_argument("--device", type=str, default="Generic Android Device", help="Device Name (e.g. Infinix GT 20 Pro, POCO F3)")
+    parser.add_argument("--codename", type=str, default="generic", help="Device Codename (e.g. X6871, alioth, agate)")
+    parser.add_argument("--version", "--firmware", dest="version", type=str, default="v1.0.0-Stable", help="ROM / Firmware Version")
     parser.add_argument("--maintainer", type=str, default="Mehraan", help="Maintainer / Script Author Name")
 
+    # AVB 2.0 / Vbmeta Option
     parser.add_argument(
         "--vbmeta",
         type=str,
-        choices=["disable", "enable", "skip"],
-        default="disable",
-        help="AVB 2.0 / Vbmeta Action: 'disable' (removes verity/verification), 'enable', or 'skip'"
+        choices=["skip", "disable", "enable"],
+        default="skip",
+        help="AVB 2.0 / Vbmeta Action: 'skip' (default), 'disable' (dm-verity off), or 'enable'"
     )
 
-    parser.add_argument(
-        "--compression",
-        type=str,
-        choices=["zstd", "raw", "erofs"],
-        default="zstd",
-        help="Partition compression format"
-    )
-
+    # Compression Configuration: 0 (Raw/Pass-through) to 22 (Max Zstandard)
     parser.add_argument(
         "--zstd-level",
         type=int,
-        default=9,
-        help="ZSTD compression level (1-19, default: 9)"
+        default=1,
+        help="ZSTD compression level (0 = raw/no compression for max speed, 1 = ultra-fast 2.5GB/s, up to 22)"
     )
 
+    # Cloud Upload
     parser.add_argument(
         "--upload",
         type=str,
-        choices=["none", "gofile", "transfersh", "all"],
+        choices=["none", "gofile"],
         default="none",
-        help="Automatically upload final ZIP to cloud host (gofile, transfersh, all)"
+        help="Automatically stream output ZIP to Gofile.io with zero RAM overhead"
     )
 
-    parser.add_argument(
-        "--no-fastboot",
-        action="store_true",
-        help="Do not include PC Fastboot scripts in the flashable zip"
-    )
-
-    parser.add_argument(
-        "--output", "-o",
-        type=str,
-        default="./output",
-        help="Output directory for generated Flashable ZIPs and checksums"
-    )
-
-    parser.add_argument(
-        "--workspace",
-        type=str,
-        default="./workspace",
-        help="Temporary workspace directory for downloads and extraction"
-    )
+    # Output paths
+    parser.add_argument("--output", "--out", "-o", dest="output", type=str, default="./output", help="Output ZIP path or directory")
+    parser.add_argument("--workspace", type=str, default="./build_workspace", help="Temporary working directory")
 
     args = parser.parse_args()
+    print_banner(args.maintainer)
 
-    print("\n" + "=" * 65)
-    print("       FLASHABLE-ENGINE: CLOUD & LOCAL BUILD PIPELINE")
-    print("                Flashing Script By " + args.maintainer)
-    print("=" * 65)
-    print(f" • Device      : {args.device} ({args.codename})")
-    print(f" • Version     : {args.version}")
-    print(f" • VBmeta Mode : {args.vbmeta.upper()}")
-    print(f" • Compression : {args.compression.upper()} (Level {args.zstd_level})")
-    print(f" • Fastboot    : {'Enabled' if not args.no_fastboot else 'Disabled'}")
-    if args.upload != "none":
-        print(f" • Cloud Upload: {args.upload.upper()}")
-    print("=" * 65 + "\n")
+    print(f"[*] Configuration:")
+    print(f"  • Device      : {args.device} ({args.codename})")
+    print(f"  • Version     : {args.version}")
+    print(f"  • Maintainer  : {args.maintainer}")
+    print(f"  • VBmeta Mode : {args.vbmeta.upper()}")
+    print(f"  • Zstd Level  : {args.zstd_level} {'(Raw Pass-Through)' if args.zstd_level == 0 else '(Ultra-Fast Multi-Core)' if args.zstd_level == 1 else ''}")
+    print(f"  • Auto Upload : {args.upload.upper()}\n")
 
-    workspace = Path(args.workspace).resolve()
-    downloads_dir = workspace / "downloads"
-    output_dir = Path(args.output).resolve()
+    work_space = Path(args.workspace).resolve()
+    work_space.mkdir(parents=True, exist_ok=True)
 
-    # Step 1: Obtain ROM Input
-    extractor = RomExtractor(workspace_dir=str(workspace / "extracted"))
+    imgs_dir = None
 
+    # Step 1: Ingest input (Download or Extract)
     if args.url:
-        downloader = UniversalDownloader(output_dir=str(downloads_dir))
-        downloaded_file = downloader.download(args.url)
-        staged_partitions_dir = extractor.extract_package(downloaded_file)
+        archive_file = work_space / "source_archive"
+        FastDownloader.download(args.url, str(archive_file))
+        extracted_dir = work_space / "extracted"
+        PartitionExtractor.extract_recursive(str(archive_file), str(extracted_dir))
+        imgs_dir = str(extracted_dir)
     elif args.file:
-        staged_partitions_dir = extractor.extract_package(Path(args.file))
+        local_path = Path(args.file).resolve()
+        if not local_path.exists():
+            sys.exit(f"[!] Error: File does not exist: {local_path}")
+        extracted_dir = work_space / "extracted"
+        PartitionExtractor.extract_recursive(str(local_path), str(extracted_dir))
+        imgs_dir = str(extracted_dir)
     elif args.rom_dir:
-        staged_partitions_dir = extractor.extract_package(Path(args.rom_dir))
-    else:
-        print("[ERROR] No input specified.")
-        sys.exit(1)
+        imgs_dir = str(Path(args.rom_dir).resolve())
+        if not os.path.isdir(imgs_dir):
+            sys.exit(f"[!] Error: Directory does not exist: {imgs_dir}")
 
-    # Step 2: Build Flashable ZIP
-    builder = FlashableBuilder(
-        device_name=args.device,
+    # Step 2: Scan and classify partitions
+    print(f"\n[*] Scanning discovered partitions in: {imgs_dir}")
+    partitions = PartitionExtractor.scan_partitions(imgs_dir)
+    print(f"[+] Total partitions identified: {len(partitions)}")
+
+    if not partitions:
+        sys.exit(f"[!] Error: No valid partition images found in '{imgs_dir}'!")
+
+    # Step 3: Determine output path
+    output_path = Path(args.output).resolve()
+    if output_path.is_dir() or str(args.output).endswith(("/", "\\")) or not str(args.output).endswith(".zip"):
+        output_path.mkdir(parents=True, exist_ok=True)
+        clean_ver = args.version.replace(" ", "_").replace("/", "-")
+        out_zip = str(output_path / f"{clean_ver}-{args.codename}-Flashable-By-Mehraan.zip")
+    else:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        out_zip = str(output_path)
+
+    # Step 4: Build Flashable Recovery Package
+    final_zip = FlashableBuilder.build(
+        partitions=partitions,
+        output_zip=out_zip,
+        device=args.device,
+        firmware=args.version,
         codename=args.codename,
-        version=args.version,
         maintainer=args.maintainer,
         vbmeta_option=args.vbmeta,
-        compression=args.compression,
-        zstd_level=args.zstd_level,
-        include_fastboot=(not args.no_fastboot),
-        output_dir=str(output_dir)
+        zstd_level=args.zstd_level
     )
 
-    final_zip = builder.build_flashable_zip(staged_partitions_dir)
-
     print("\n" + "═" * 65)
-    print("               BUILD PROCESS COMPLETED!")
+    print("               BUILD PROCESS COMPLETED IN SECONDS!")
     print(f"  Flashable ZIP : {final_zip}")
     print("═" * 65 + "\n")
 
-    # Step 3: Cloud Upload (if requested)
-    if args.upload in ["gofile", "all"]:
-        CloudUploader.upload_gofile(final_zip)
-    if args.upload in ["transfersh", "all"]:
-        CloudUploader.upload_transfersh(final_zip)
+    # Step 5: Upload to Gofile (if requested)
+    if args.upload == "gofile":
+        print("[*] Initiating Zero-RAM streaming upload to Gofile.io...")
+        upload_file_cli(final_zip)
 
-    # Set GitHub Actions output variable if in CI
+    # Set GitHub Actions output variables
     github_output = os.environ.get("GITHUB_OUTPUT")
     if github_output and os.path.exists(github_output):
         with open(github_output, "a") as f:
             f.write(f"zip_path={final_zip}\n")
-            f.write(f"zip_name={final_zip.name}\n")
+            f.write(f"zip_name={Path(final_zip).name}\n")
 
 
 if __name__ == "__main__":

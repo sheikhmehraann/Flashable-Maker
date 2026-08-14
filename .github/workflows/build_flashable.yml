@@ -36,25 +36,11 @@ on:
           - 'disable'
           - 'enable'
         default: 'skip'
-      compression_format:
-        description: 'Partition Compression Format'
-        required: true
-        type: choice
-        options:
-          - 'zstd'
-          - 'raw'
-          - 'erofs'
-        default: 'zstd'
       zstd_level:
-        description: 'ZSTD Compression Level'
+        description: 'ZSTD Compression Level (0 = raw pass-through, 1 = ultra-fast 2.5GB/s, up to 22)'
         required: true
-        default: '9'
+        default: '1'
         type: string
-      include_fastboot:
-        description: 'Include PC Fastboot Flasher (Windows .bat & Linux .sh)'
-        required: false
-        type: boolean
-        default: true
 
 jobs:
   build:
@@ -74,7 +60,7 @@ jobs:
       - name: Install High-Speed Dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq aria2 zstd libarchive-tools curl
+          sudo apt-get install -y -qq aria2 zstd p7zip-full libarchive-tools curl
 
       - name: Install Python Requirements
         run: |
@@ -89,11 +75,6 @@ jobs:
       - name: Run Build Pipeline & Upload to Gofile
         id: build_step
         run: |
-          FASTBOOT_FLAG=""
-          if [ "${{ github.event.inputs.include_fastboot }}" != "true" ]; then
-            FASTBOOT_FLAG="--no-fastboot"
-          fi
-
           python main.py \
             --url "${{ github.event.inputs.rom_url }}" \
             --device "${{ github.event.inputs.device_name }}" \
@@ -101,8 +82,6 @@ jobs:
             --version "${{ github.event.inputs.rom_version }}" \
             --maintainer "${{ github.event.inputs.maintainer }}" \
             --vbmeta "${{ github.event.inputs.vbmeta_option }}" \
-            --compression "${{ github.event.inputs.compression_format }}" \
             --zstd-level "${{ github.event.inputs.zstd_level }}" \
             --upload "gofile" \
-            --output "./output" \
-            $FASTBOOT_FLAG
+            --output "./output"
