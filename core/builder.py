@@ -279,10 +279,10 @@ flash_partition() {{
 flash_partition_zstd() {{
     src="$1"
     dest="$2"
-    pname=$(echo "$dest" | cut -d '/' -f 5)
-    ui_print "  • Flashing logical partition: $pname"
+    partition_name=$(echo "$dest" | cut -d '/' -f 5)
+    ui_print "- Flashing partition $partition_name"
     unzip -p "$ZIPFILE" "$src" | /tmp/META-INF/zstd -c -d >"$dest" || {{
-        ui_print "Error: Failed to stream-flash $src"
+        ui_print "Error: Failed to flash compressed $src to $dest"
         exit 1
     }}
 }}
@@ -291,10 +291,10 @@ flash_firmware_both_slots() {{
     img="$1"
     base="$2"
     if [ -e "/dev/block/by-name/${{base}}_a" ]; then
-        flash_partition "$img" "/dev/block/by-name/${{base}}_a" "  • Flashing ${{base}} (Slot A & B)..."
+        flash_partition "$img" "/dev/block/by-name/${{base}}_a" "- Flashing partition ${{base}} to both slots"
         flash_partition "$img" "/dev/block/by-name/${{base}}_b" ""
     elif [ -e "/dev/block/by-name/${{base}}" ]; then
-        flash_partition "$img" "/dev/block/by-name/${{base}}" "  • Flashing ${{base}}..."
+        flash_partition "$img" "/dev/block/by-name/${{base}}" "- Flashing partition ${{base}}"
     fi
 }}
 
@@ -336,30 +336,23 @@ chmod 0755 /tmp/META-INF/zstd 2>/dev/null
 unzip -o "$ZIPFILE" "META-INF/bin/*" -d /tmp >/dev/null 2>&1
 chmod 0755 /tmp/META-INF/bin/* 2>/dev/null
 
-        # UI Banner
-        ui_print " "
-        ui_print " ╔══════════════════════════════════════════════╗ "
-        ui_print " ║                                              ║ "
-        ui_print " ║          Flashing Script By Mehraan          ║ "
-        ui_print " ║                                              ║ "
-        ui_print " ╠══════════════════════════════════════════════╣ "
-        ui_print " ║                                              ║ "
-        ui_print " ║   • Device     : {self.device_name} "
-        ui_print " ║   • Codename   : {self.codename} "
-        ui_print " ║   • Version    : {self.version} "
-        ui_print " ║   • Maintainer : {self.maintainer} "
-        ui_print " ║                                              ║ "
-        ui_print " ╚══════════════════════════════════════════════╝ "
+        # UI Banner (Rama Style)
+        ui_print "============================================"
+        ui_print "Flashable ROM By Mehraan"
+        ui_print "Device     : {self.device_name}"
+        ui_print "Codename   : {self.codename}"
+        ui_print "Version    : {self.version}"
+        ui_print "Maintainer : {self.maintainer}"
+        ui_print "============================================"
         ui_print " "
 
         checkDevice
 
-        # Unmount active partitions
-        umount /system /system_root /vendor /product /system_ext /odm /data 2>/dev/null || true
+        unmountPartitions
 
+        ui_print " "
         SLOT=$(getprop ro.boot.slot_suffix)
-        [ -z "$SLOT" ] && SLOT="_a"
-        ui_print "[*] Target Boot Slot : $SLOT"
+        ui_print "Checking boot slot... ${{SLOT}}"
 
         # Clear Virtual A/B Cow space
         /tmp/META-INF/bin/lptools clear-cow >/dev/null 2>&1 || true
@@ -367,14 +360,14 @@ chmod 0755 /tmp/META-INF/bin/* 2>/dev/null
         # Firmware Flashing
         if [ "{len(found_firmware)}" -gt "0" ]; then
             ui_print " "
-            ui_print "- Flashing firmware partitions..."
+            ui_print "Patching firmware to both slot..."
 {fw_flash_lines}
         fi
 
         # Boot & Kernel Images
         if [ "{len(found_boot)}" -gt "0" ]; then
             ui_print " "
-            ui_print "- Flashing boot & kernel images..."
+            ui_print "Patching system..."
 {boot_flash_lines}
         fi
 
@@ -385,49 +378,43 @@ chmod 0755 /tmp/META-INF/bin/* 2>/dev/null
         # Dynamic Super Partitions
         if [ "{len(found_super)}" -gt "0" ]; then
             ui_print " "
-            ui_print "- Provisioning dynamic partitions (super)..."
+            ui_print "Patching super partitions..."
 {super_clear_lines}
 {super_create_lines}
 {super_map_lines}
-            ui_print "- Streaming logical partitions..."
 {super_flash_lines}
         fi
 
         ui_print " "
-        ui_print " ╔══════════════════════════════════════════════╗ "
-        ui_print " ║          ROM Successfully Flashed!           ║ "
-        ui_print " ║          Flashing Script By Mehraan          ║ "
-        ui_print " ╚══════════════════════════════════════════════╝ "
+        ui_print "============================================"
+        ui_print "ROM Installed Successfully!"
+        ui_print "Flashing Script By Mehraan"
+        ui_print "============================================"
         ui_print " "
         exit 0
         """
 
     def _generate_windows_fastboot_bat(self, found_boot: List[str], found_firmware: List[str]) -> str:
-        """Generates Windows PC Fastboot Batch Flasher."""
+        """Generates Windows PC Fastboot Batch Flasher (Rama Style)."""
         boot_lines = "\n".join([f"%fastboot% flash {p}_ab images\\{p}.img" for p in found_boot if p != "vbmeta"])
         vb_line = "%fastboot% flash vbmeta_ab images\\vbmeta.img --disable-verity --disable-verification" if self.vbmeta_option == "disable" else "%fastboot% flash vbmeta_ab images\\vbmeta.img"
 
         return f"""@echo off&setlocal enabledelayedexpansion
 cd %~dp0
 cd ..
-title Flashing Script By Mehraan - Fastboot Flasher
+title Fastboot Flasher By Mehraan
 set fastboot=META-INF\\bin\\fastboot\\fastboot.exe
 if %PROCESSOR_ARCHITECTURE%==x86 (set fastboot_f=META-INF\\bin\\fastboot\\fastboot32.exe) else set fastboot_f=META-INF\\bin\\fastboot\\fastboot64.exe
 
-echo.
-echo  ╔══════════════════════════════════════════════════════╗
-echo  ║                                                      ║
-echo  ║              Flashing Script By Mehraan              ║
-echo  ║                   FASTBOOT WINDOWS                   ║
-echo  ║                                                      ║
-echo  ╠══════════════════════════════════════════════════════╣
-echo  ║                                                      ║
-echo  ║   • Device     : {self.device_name}
-echo  ║   • Codename   : {self.codename}
-echo  ║   • Version    : {self.version}
-echo  ║   • Maintainer : {self.maintainer}
-echo  ║                                                      ║
-echo  ╚══════════════════════════════════════════════════════╝
+echo.==============================================
+echo.         Fastboot ROM Flasher By Mehraan
+echo.                   WINDOWS
+echo.==============================================
+echo.Device     : {self.device_name}
+echo.Codename   : {self.codename}
+echo.Version    : {self.version}
+echo.Maintainer : {self.maintainer}
+echo.==============================================
 echo.
 set /p CHOICE="Format Data? (y/n): "
 echo.
@@ -440,6 +427,7 @@ echo.
 echo ==============================================
 echo           ROM INSTALLED SUCCESSFULLY
 echo           Flashing Script By Mehraan
+echo ==============================================
 if /I "%CHOICE%" == "y" (
     echo Formatting Data...
     %fastboot% erase userdata >NUL 2>NUL
@@ -451,7 +439,7 @@ pause
 """
 
     def _generate_linux_fastboot_sh(self, found_boot: List[str], found_firmware: List[str]) -> str:
-        """Generates Linux PC Fastboot Shell Flasher."""
+        """Generates Linux PC Fastboot Shell Flasher (Rama Style)."""
         boot_lines = "\n".join([f"$fastboot flash {p}_ab images/{p}.img" for p in found_boot if p != "vbmeta"])
         vb_line = "$fastboot flash vbmeta_ab images/vbmeta.img --disable-verity --disable-verification" if self.vbmeta_option == "disable" else "$fastboot flash vbmeta_ab images/vbmeta.img"
 
@@ -462,20 +450,15 @@ fastbootbins=META-INF/bin/fastboot
 fastboot=$fastbootbins/fastboot
 chmod 755 $fastbootbins/*
 
-echo ""
-echo " ╔══════════════════════════════════════════════════════╗"
-echo " ║                                                      ║"
-echo " ║              Flashing Script By Mehraan              ║"
-echo " ║                    FASTBOOT LINUX                    ║"
-echo " ║                                                      ║"
-echo " ╠══════════════════════════════════════════════════════╣"
-echo " ║                                                      ║"
-echo " ║   • Device     : {self.device_name}"
-echo " ║   • Codename   : {self.codename}"
-echo " ║   • Version    : {self.version}"
-echo " ║   • Maintainer : {self.maintainer}"
-echo " ║                                                      ║"
-echo " ╚══════════════════════════════════════════════════════╝"
+echo "=============================================="
+echo "         Fastboot ROM Flasher By Mehraan      "
+echo "                     LINUX                    "
+echo "=============================================="
+echo "Device     : {self.device_name}"
+echo "Codename   : {self.codename}"
+echo "Version    : {self.version}"
+echo "Maintainer : {self.maintainer}"
+echo "=============================================="
 echo ""
 read -p "Format Data? (y/n): " CHOICE
 
@@ -487,6 +470,7 @@ echo ""
 echo "=============================================="
 echo "          ROM INSTALLED SUCCESSFULLY          "
 echo "          Flashing Script By Mehraan          "
+echo "=============================================="
 if [[ $CHOICE == y ]]; then
     echo "Formatting Data..."
     $fastboot erase userdata > /dev/null 2>&1

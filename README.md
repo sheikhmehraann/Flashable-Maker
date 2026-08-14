@@ -129,44 +129,46 @@ python main.py \
 
 ---
 
-## 📱 Recovery Console Preview
+## 📱 Recovery Console Preview (Rama Style)
 
 When the generated package is flashed in TWRP / OrangeFox, it renders:
 
 ```text
- ╔══════════════════════════════════════════════╗ 
- ║                                              ║ 
- ║          Flashing Script By Mehraan          ║ 
- ║                                              ║ 
- ╠══════════════════════════════════════════════╣ 
- ║                                              ║ 
- ║   • Device    : POCO F3                      ║ 
- ║   • Codename  : alioth                       ║ 
- ║   • Version   : v1.0.0-Stable                ║ 
- ║                                              ║ 
- ╚══════════════════════════════════════════════╝ 
+============================================
+Flashable ROM By Mehraan
+Device     : POCO F3
+Codename   : alioth
+Version    : v1.0.0-Stable
+Maintainer : Mehraan
+============================================
 
-- Target Slot : _a
-  • Flashing boot (Slot A & B)...
-  • Flashing dtbo (Slot A & B)...
-  • Flashing vendor_boot (Slot A & B)...
+Checking boot slot... _a
 
- ╔══════════════════════════════════════════════╗ 
- ║        Configuring Android Verified Boot     ║ 
- ╚══════════════════════════════════════════════╝ 
-- Checking current AVB vbmeta status...
-  • Verity       : disabled
-  • Verification : disabled
+Patching firmware to both slot...
+- Flashing partition modem to both slots
+- Flashing partition dsp to both slots
+- Flashing partition bluetooth to both slots
+- Flashing partition tz to both slots
+- Flashing partition xbl to both slots
 
-- Provisioning logical dynamic partitions...
-- Streaming logical partitions...
-  • Flashing logical partition: system
-  • Flashing logical partition: vendor
-  • Flashing logical partition: product
+Patching system...
+- Flashing partition boot to both slots
+- Flashing partition dtbo to both slots
+- Flashing partition vendor_boot to both slots
+- Flashing partition vbmeta to both slots
 
- ╔══════════════════════════════════════════════╗ 
- ║          ROM Successfully Flashed!           ║ 
- ╚══════════════════════════════════════════════╝ 
+- Configuring AVB 2.0 (Vbmeta)...
+  • AVB Status : Disabled [dm-verity & verification OFF]
+
+Patching super partitions...
+- Flashing partition system
+- Flashing partition vendor
+- Flashing partition product
+
+============================================
+ROM Installed Successfully!
+Flashing Script By Mehraan
+============================================
 ```
 
 ---
