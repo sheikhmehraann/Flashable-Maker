@@ -185,7 +185,7 @@ class FlashableBuilder:
             '        if ! getVolumeKey; then ui_print "- You chose to abort flashing."; exit 1;',
             '        else ui_print "- You chose to continue flashing."; fi',
             '    else',
-            f'        ui_print "- Target Device    : Verified [{codename}]"',
+            f'        ui_print "- Target Device    : Verified {codename}"',
             '    fi',
             "}",
             "",
@@ -235,7 +235,7 @@ class FlashableBuilder:
             'slot_display="A"',
             '[ "$SLOT" = "_b" ] && slot_display="B"',
             '[ -z "$SLOT" ] && slot_display="A-Only"',
-            'ui_print "- Active Boot Slot : Slot ${slot_display} (${SLOT:-single})"',
+            'ui_print "- Active Boot Slot : Slot ${slot_display}"',
             "lptools clear-cow",
             "checkExit",
             ""
