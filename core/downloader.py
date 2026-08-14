@@ -43,15 +43,19 @@ class UniversalDownloader:
             direct_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
             return direct_url, None, None
 
-        # 2. SourceForge Links (e.g. sourceforge.net/projects/.../files/.../download)
+        # 2. SourceForge Links (Convert to direct downloads.sourceforge.net CDN mirror)
         if "sourceforge.net" in url:
             clean_url = url.split("?")[0]
             parts = [p for p in clean_url.split("/") if p and p != "download"]
             fname = parts[-1] if parts and ("." in parts[-1]) else None
-            if not url.endswith("/download") and not "files" in url:
+            # Convert https://sourceforge.net/projects/<proj>/files/<subpath> -> https://downloads.sourceforge.net/project/<proj>/<subpath>
+            match = re.search(r"sourceforge\.net/projects/([^/]+)/files/(.+)", clean_url)
+            if match:
+                proj = match.group(1)
+                subpath = match.group(2).rstrip("/").removesuffix("/download")
+                direct_url = f"https://downloads.sourceforge.net/project/{proj}/{subpath}"
+            elif not url.endswith("/download") and not "files" in url:
                 direct_url = url.rstrip("/") + "/files/latest/download"
-            elif not url.endswith("/download"):
-                direct_url = url.rstrip("/") + "/download"
             else:
                 direct_url = url
             return direct_url, fname, None
@@ -89,27 +93,31 @@ class UniversalDownloader:
 
     def download(self, url: str, custom_filename: Optional[str] = None) -> Path:
         """
-        Executes download using aria2c (fastest) or curl with automatic fallbacks.
+        Executes download using aria2c (fastest) with automatic fallbacks.
         Returns the absolute path to the downloaded file.
         """
         print(f"\n[DOWNLOADER] Initializing download for: {url}")
         direct_url, resolved_name, headers = self.resolve_url(url)
         target_name = custom_filename or resolved_name or "downloaded_package.bin"
+        print(f"[DOWNLOADER] Target URL  : {direct_url}")
+        print(f"[DOWNLOADER] Target File : {target_name}")
 
-        # Strategy A: aria2c (multi-threaded, 16 connections)
+        # Strategy A: aria2c (multi-threaded, 16 connections, no pre-allocation lag)
         if self.has_aria2:
-            print(f"[DOWNLOADER] Using aria2c accelerator ({self.max_connections} parallel streams)...")
+            print(f"[DOWNLOADER] Multi-thread accelerator active ({self.max_connections} parallel streams)...")
             cmd = [
                 "aria2c",
                 "--console-log-level=warn",
-                "--summary-interval=5",
+                "--summary-interval=3",
                 f"--max-connection-per-server={self.max_connections}",
                 f"--split={self.max_connections}",
                 "--min-split-size=1M",
                 "--stream-piece-selector=geom",
+                "--file-allocation=none",
                 "--auto-file-renaming=false",
                 "--allow-overwrite=true",
                 "--check-certificate=false",
+                '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
                 f"--dir={self.output_dir}",
                 direct_url
             ]
@@ -119,11 +127,11 @@ class UniversalDownloader:
             res = subprocess.run(cmd)
             if res.returncode == 0:
                 downloaded_file = self._find_latest_download(target_name)
-                if downloaded_file and downloaded_file.exists():
+                if downloaded_file and downloaded_file.exists() and downloaded_file.stat().st_size > 1024:
                     print(f"[DOWNLOADER] Download Complete: {downloaded_file.name} ({downloaded_file.stat().st_size:,} bytes)")
                     return downloaded_file
 
-            print("[DOWNLOADER] aria2c failed or was interrupted, attempting curl fallback...")
+            print("[DOWNLOADER] aria2c interrupted or failed, attempting curl fallback...")
 
         # Strategy B: curl (high speed, follows redirects)
         if shutil.which("curl"):
