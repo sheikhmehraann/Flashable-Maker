@@ -4,7 +4,7 @@
 ⚡ main.py - Ultra-Fast Flashable ROM Maker Engine ⚡
 Flashing Script By Mehraan
 Zero-Copy Pass-Through | Multi-Core Zstandard (Level 0-22) | Native Multi-Thread STORE Packaging
-Converts 10GB+ ROM dumps, archives (.tar.zst, .zip, .7z), payload.bin, or super.img into flashables in seconds.
+Powered by gofile_transfer resolver chain and 16MB socket buffer streaming uploader.
 """
 
 import os
@@ -21,7 +21,7 @@ if hasattr(sys.stderr, "reconfigure"):
 from core.downloader import FastDownloader
 from core.extractor import PartitionExtractor
 from core.builder import FlashableBuilder
-from gofile_upload import upload_file_cli
+from gofile_transfer.uploader import GoFileUploader
 
 
 def print_banner(maintainer="Mehraan"):
@@ -29,6 +29,17 @@ def print_banner(maintainer="Mehraan"):
     print("║ ⚡ FLASHABLE ROM MAKER ENGINE (ULTRA-FAST NATIVE PIPELINE) ⚡             ║")
     print(f"║ Flashing Script By {maintainer:<12} | Zero-Copy | Multi-Thread Packaging      ║")
     print("╚═════════════════════════════════════════════════════════════════════════╝\n")
+
+
+def write_github_output(key: str, value: str):
+    """Writes key=value to $GITHUB_OUTPUT if running inside GitHub Actions."""
+    gh_out = os.environ.get("GITHUB_OUTPUT")
+    if gh_out:
+        try:
+            with open(gh_out, "a", encoding="utf-8") as f:
+                f.write(f"{key}={value}\n")
+        except Exception:
+            pass
 
 
 def main():
@@ -113,9 +124,9 @@ def main():
     # Step 1: Ingest input (Download or Extract)
     if args.url:
         archive_file = work_space / "source_archive"
-        FastDownloader.download(args.url, str(archive_file))
+        downloaded = FastDownloader.download(args.url, str(archive_file))
         extracted_dir = work_space / "extracted"
-        PartitionExtractor.extract_recursive(str(archive_file), str(extracted_dir))
+        PartitionExtractor.extract_recursive(str(downloaded), str(extracted_dir))
         imgs_dir = str(extracted_dir)
     elif args.file:
         local_path = Path(args.file).resolve()
@@ -164,17 +175,24 @@ def main():
     print(f"  Flashable ZIP : {final_zip}")
     print("═" * 65 + "\n")
 
+    write_github_output("zip_path", final_zip)
+    write_github_output("zip_name", Path(final_zip).name)
+
     # Step 5: Upload to Gofile (if requested)
     if args.upload == "gofile":
-        print("[*] Initiating Zero-RAM streaming upload to Gofile.io...")
-        upload_file_cli(final_zip)
-
-    # Set GitHub Actions output variables
-    github_output = os.environ.get("GITHUB_OUTPUT")
-    if github_output and os.path.exists(github_output):
-        with open(github_output, "a") as f:
-            f.write(f"zip_path={final_zip}\n")
-            f.write(f"zip_name={Path(final_zip).name}\n")
+        print("[*] Initiating high-speed streaming upload to Gofile.io...")
+        uploader = GoFileUploader()
+        result = uploader.upload(final_zip)
+        if result and result.download_page:
+            print("\n" + "═" * 65)
+            print("                 GOFILE CLOUD UPLOAD COMPLETE!")
+            print(f"  Download Page : {result.download_page}")
+            print(f"  File ID       : {result.file_id}")
+            print("═" * 65 + "\n")
+            write_github_output("download_page", result.download_page)
+            write_github_output("file_id", result.file_id)
+        else:
+            print("[!] Warning: Gofile upload finished without download URL.")
 
 
 if __name__ == "__main__":
