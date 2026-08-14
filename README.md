@@ -110,25 +110,38 @@ Flashable-Maker/
 
 ---
 
-## ☁️ How to Build via GitHub Actions (Cloud)
+## ☁️ 1-Click Cloud Building via GitHub Actions (Free & Zero Setup)
 
-1. Open your repository on GitHub: [`Flashable-Maker`](https://github.com/sheikhmehraann/Flashable-Maker).
-2. Go to the **Actions** tab.
-3. Select **"Build Flashable ROM Package (Flashable-Engine)"** from the left sidebar.
-4. Click **"Run workflow"** and fill in the parameters:
+You can build 10GB+ flashable ROM packages entirely in the cloud **without downloading anything to your PC, without using your personal internet data, and without installing any tools or Python!**
 
-| Input | Description | Default / Example |
+### 🚀 Step-by-Step Guide (For Everyone):
+
+1. **🍴 Fork this Repository**:
+   - Click the [**Fork**](https://github.com/sheikhmehraann/Flashable-Maker/fork) button at the top-right corner of this repository to create your own personal copy.
+
+2. **⚡ Enable Workflows**:
+   - In your newly forked repository, navigate to the **Actions** tab.
+   - Click the green button: **"I understand my workflows, go ahead and enable them"**.
+
+3. **▶️ Run the Flashable Builder**:
+   - Select **"Build Flashable ROM Package (Flashable-Engine)"** from the left workflow list.
+   - Click the **"Run workflow"** button on the right.
+   - Fill in your ROM parameters:
+
+| Input Parameter | Description | Default / Example |
 | :--- | :--- | :--- |
-| `rom_url` | Direct URL to ROM (SourceForge, GDrive, Direct Link) | `https://downloads.sourceforge.net/...` |
-| `device_name` | Full Device Marketing Name | `Infinix GT 20 Pro` |
-| `device_codename` | Hardware Board Codename | `X6871` |
-| `rom_version` | ROM / Firmware Version String | `15.1.2.180SP05OP001PF001AZ` |
-| `maintainer` | Package Maintainer Name | `Mehraan` |
-| `vbmeta_option` | AVB 2.0 Action (`enable`, `disable`, `skip`) | `enable` |
-| `zstd_level` | ZSTD Compression Level (`0` to `22`) | `22` (Ultra-Max) |
-| `zip_level` | ZIP Deflate Level (`0` = Store, `9` = Max) | `9` |
+| **`rom_url`** | Direct download link (Google Drive, SourceForge, MediaFire, Direct Link) | `https://drive.google.com/file/d/...` |
+| **`device_name`** | Full Device Marketing Name | `Infinix GT 20 Pro` |
+| **`device_codename`** | Hardware Board Codename | `X6871` |
+| **`rom_version`** | ROM / Firmware Version String | `15.1.2.180SP05OP001PF001AZ` |
+| **`maintainer`** | Maintainer / Author Name | `Mehraan` |
+| **`vbmeta_option`** | AVB 2.0 Action (`enable`, `disable`, `skip`) | `enable` |
+| **`zstd_level`** | ZSTD Compression Level (`0` to `22`) | `22` (Ultra-Max) |
+| **`zip_level`** | ZIP Deflate Level (`0` = Store, `9` = Max) | `9` |
 
-5. Click **"Run workflow"**. When completed, the workflow summary will display your **GoFile download link** and file statistics!
+4. **📥 Instant GoFile.io Download Link**:
+   - Click **"Run workflow"**.
+   - Within 1–2 minutes, GitHub's high-speed cloud runner will download, unpack, build the flashable ZIP, and provide your **instant public GoFile.io download link** directly in the GitHub Job Summary!
 
 ---
 
