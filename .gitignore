@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.env
+venv/
+env/
+
+# Build & Workspace Artifacts
+workspace/
+downloads/
+output/
+*.img
+*.raw
+*.zst
+*.zip
+*.md5
+*.sha256
+
+# OS files
+.DS_Store
+Thumbs.db

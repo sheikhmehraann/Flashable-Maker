@@ -1,0 +1,10 @@
+{
+  "device_name": "POCO F3",
+  "device_codename": "alioth",
+  "rom_version": "v1.0.0-Stable",
+  "maintainer": "Mehraan",
+  "vbmeta_option": "disable",
+  "compression_format": "zstd",
+  "include_fastboot": true,
+  "download_url": "https://sourceforge.net/projects/your-rom/files/latest/download"
+}

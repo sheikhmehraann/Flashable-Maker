@@ -1,0 +1,170 @@
+name: Build Flashable ROM Package (Flashable-Engine)
+
+on:
+  workflow_dispatch:
+    inputs:
+      rom_url:
+        description: 'Downloadable ROM Link (Google Drive, SourceForge, MediaFire, Direct URL, GitHub Release)'
+        required: true
+        type: string
+      device_name:
+        description: 'Device Name (e.g. POCO F3, Xiaomi 11T, Redmi Note 12)'
+        required: true
+        default: 'POCO F3'
+        type: string
+      device_codename:
+        description: 'Device Codename (e.g. alioth, agate, tapas)'
+        required: true
+        default: 'alioth'
+        type: string
+      rom_version:
+        description: 'ROM Version / Firmware Tag (e.g. v1.0.0-Stable, 16.0.3)'
+        required: true
+        default: 'v1.0.0-Stable'
+        type: string
+      maintainer:
+        description: 'Maintainer / Script Author'
+        required: true
+        default: 'Mehraan'
+        type: string
+      vbmeta_option:
+        description: 'AVB 2.0 / Vbmeta Option (Built into script, no extra zips)'
+        required: true
+        type: choice
+        options:
+          - 'disable'
+          - 'enable'
+          - 'skip'
+        default: 'disable'
+      compression_format:
+        description: 'Partition Compression Format'
+        required: true
+        type: choice
+        options:
+          - 'zstd'
+          - 'raw'
+          - 'erofs'
+        default: 'zstd'
+      include_fastboot:
+        description: 'Include PC Fastboot Flasher (Windows .bat & Linux .sh)'
+        required: false
+        type: boolean
+        default: true
+      upload_target:
+        description: 'Upload Target for Output ZIP'
+        required: true
+        type: choice
+        options:
+          - 'github_release'
+          - 'transfer_sh'
+          - 'go_file'
+          - 'all'
+        default: 'github_release'
+
+jobs:
+  build:
+    name: Build Flashable Package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Flashable-Engine Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            aria2 \
+            p7zip-full \
+            zstd \
+            libarchive-tools \
+            libfuse2 \
+            curl \
+            wget
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Set Tool Executable Permissions
+        run: |
+          chmod -R +x bin/host/ || true
+          chmod -R +x bin/device/ || true
+
+      - name: Run Master Build Pipeline
+        id: build_step
+        run: |
+          FASTBOOT_FLAG=""
+          if [ "${{ github.event.inputs.include_fastboot }}" != "true" ]; then
+            FASTBOOT_FLAG="--no-fastboot"
+          fi
+
+          python main.py \
+            --url "${{ github.event.inputs.rom_url }}" \
+            --device "${{ github.event.inputs.device_name }}" \
+            --codename "${{ github.event.inputs.device_codename }}" \
+            --version "${{ github.event.inputs.rom_version }}" \
+            --maintainer "${{ github.event.inputs.maintainer }}" \
+            --vbmeta "${{ github.event.inputs.vbmeta_option }}" \
+            --compression "${{ github.event.inputs.compression_format }}" \
+            --output "./output" \
+            $FASTBOOT_FLAG
+
+      - name: Upload Output Artifact to GitHub Workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: Flashable-ROM-${{ github.event.inputs.device_codename }}-${{ github.event.inputs.rom_version }}
+          path: output/*
+          retention-days: 7
+
+      - name: Publish GitHub Release
+        if: ${{ github.event.inputs.upload_target == 'github_release' || github.event.inputs.upload_target == 'all' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.rom_version }}-${{ github.event.inputs.device_codename }}
+          name: "Flashable Package: ${{ github.event.inputs.device_name }} (${{ github.event.inputs.rom_version }})"
+          body: |
+            ### 🚀 Flashable ROM Package Build
+            - **Device:** ${{ github.event.inputs.device_name }} (`${{ github.event.inputs.device_codename }}`)
+            - **Version:** ${{ github.event.inputs.rom_version }}
+            - **Maintainer:** ${{ github.event.inputs.maintainer }}
+            - **Vbmeta Mode:** `${{ github.event.inputs.vbmeta_option }}`
+            - **Compression:** `${{ github.event.inputs.compression_format }}`
+            - **Fastboot Included:** `${{ github.event.inputs.include_fastboot }}`
+            
+            *Generated automatically by Flashable-Engine via GitHub Actions.*
+          files: output/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload to Transfer.sh
+        if: ${{ github.event.inputs.upload_target == 'transfer_sh' || github.event.inputs.upload_target == 'all' }}
+        run: |
+          for file in output/*.zip; do
+            echo "Uploading $file to transfer.sh..."
+            URL=$(curl -s --upload-file "$file" "https://transfer.sh/$(basename "$file")")
+            echo "Transfer.sh Download Link: $URL"
+            echo "### 📦 Transfer.sh Mirror: $URL" >> $GITHUB_STEP_SUMMARY
+          done
+
+      - name: Upload to Gofile.io
+        if: ${{ github.event.inputs.upload_target == 'go_file' || github.event.inputs.upload_target == 'all' }}
+        run: |
+          SERVER=$(curl -s https://api.gofile.io/servers | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4)
+          [ -z "$SERVER" ] && SERVER="store1"
+          for file in output/*.zip; do
+            echo "Uploading $file to Gofile server $SERVER..."
+            RESP=$(curl -s -F "file=@$file" "https://${SERVER}.gofile.io/contents/uploadfile")
+            LINK=$(echo "$RESP" | grep -o '"downloadPage":"[^"]*"' | cut -d'"' -f4)
+            echo "Gofile Download Link: $LINK"
+            echo "### 📦 Gofile Mirror: $LINK" >> $GITHUB_STEP_SUMMARY
+          done

@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""
+Flashable-Engine: Universal High-Speed Downloader
+Supports Direct URLs, Google Drive, SourceForge, MediaFire, GitHub Releases, AndroidFileHost.
+Leverages aria2c (16 parallel connections/splits) with Python requests/gdown fallbacks.
+"""
+
+import os
+import re
+import sys
+import shutil
+import urllib.parse
+import subprocess
+from pathlib import Path
+from typing import Optional, Tuple
+
+try:
+    import requests
+except ImportError:
+    requests = None
+
+
+class UniversalDownloader:
+    """Handles high-speed multi-threaded downloads from diverse cloud hosts."""
+
+    def __init__(self, output_dir: str = "./downloads", max_connections: int = 16):
+        self.output_dir = Path(output_dir).resolve()
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.max_connections = max_connections
+        self.has_aria2 = shutil.which("aria2c") is not None
+
+    def resolve_url(self, url: str) -> Tuple[str, Optional[str], Optional[dict]]:
+        """
+        Resolves various cloud hosting URLs into direct downloadable streams.
+        Returns (direct_url, optional_filename, optional_headers).
+        """
+        url = url.strip()
+
+        # 1. Google Drive Links (e.g. drive.google.com/file/d/<FILE_ID>/view or drive.google.com/open?id=<FILE_ID>)
+        gdrive_match = re.search(r"drive\.google\.com/(?:file/d/|open\?id=|uc\?id=)([a-zA-Z0-9_-]+)", url)
+        if gdrive_match:
+            file_id = gdrive_match.group(1)
+            direct_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
+            return direct_url, None, None
+
+        # 2. SourceForge Links (e.g. sourceforge.net/projects/.../files/.../download)
+        if "sourceforge.net" in url:
+            if not url.endswith("/download") and not "files" in url:
+                direct_url = url.rstrip("/") + "/files/latest/download"
+            elif not url.endswith("/download"):
+                direct_url = url.rstrip("/") + "/download"
+            else:
+                direct_url = url
+            return direct_url, None, None
+
+        # 3. MediaFire Links (e.g. mediafire.com/file/<KEY>/<NAME>/file)
+        if "mediafire.com" in url:
+            direct_url = self._resolve_mediafire(url)
+            return direct_url, None, None
+
+        # 4. GitHub Release Direct or Raw
+        if "github.com" in url and "/releases/download/" in url:
+            return url, None, None
+
+        # Default direct URL
+        return url, None, None
+
+    def _resolve_mediafire(self, page_url: str) -> str:
+        """Scrapes direct download link from MediaFire landing page."""
+        if not requests:
+            return page_url
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            resp = requests.get(page_url, headers=headers, timeout=15)
+            match = re.search(r'href="((?:https?:)?//download\d+\.mediafire\.com/[^"]+)"', resp.text)
+            if match:
+                direct = match.group(1)
+                if direct.startswith("//"):
+                    direct = "https:" + direct
+                return direct
+        except Exception as e:
+            print(f"[WARNING] MediaFire scraper failed: {e}. Falling back to raw URL.")
+        return page_url
+
+    def download(self, url: str, custom_filename: Optional[str] = None) -> Path:
+        """
+        Executes download using aria2c (fastest) with automatic fallbacks.
+        Returns the absolute path to the downloaded file.
+        """
+        print(f"\n[DOWNLOADER] Initializing download for: {url}")
+        direct_url, resolved_name, headers = self.resolve_url(url)
+        target_name = custom_filename or resolved_name
+
+        # Strategy A: aria2c (multi-threaded, 16 connections)
+        if self.has_aria2:
+            print(f"[DOWNLOADER] Using aria2c accelerator ({self.max_connections} parallel streams)...")
+            cmd = [
+                "aria2c",
+                "--console-log-level=warn",
+                "--summary-interval=5",
+                f"--max-connection-per-server={self.max_connections}",
+                f"--split={self.max_connections}",
+                "--min-split-size=1M",
+                "--stream-piece-selector=geom",
+                "--auto-file-renaming=false",
+                "--allow-overwrite=true",
+                "--check-certificate=false",
+                f"--dir={self.output_dir}",
+                direct_url
+            ]
+            if target_name:
+                cmd.append(f"--out={target_name}")
+
+            res = subprocess.run(cmd)
+            if res.returncode == 0:
+                downloaded_file = self._find_latest_download(target_name)
+                if downloaded_file and downloaded_file.exists():
+                    print(f"[DOWNLOADER] Download Complete: {downloaded_file.name} ({downloaded_file.stat().st_size:,} bytes)")
+                    return downloaded_file
+
+            print("[DOWNLOADER] aria2c failed or was interrupted, attempting Python stream fallback...")
+
+        # Strategy B: Python Requests Stream fallback
+        return self._download_python_stream(direct_url, target_name)
+
+    def _download_python_stream(self, url: str, target_name: Optional[str] = None) -> Path:
+        """Fallback chunked streaming downloader using requests/urllib."""
+        import urllib.request
+        print("[DOWNLOADER] Starting fallback streaming download...")
+
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FlashableMaker/1.0"}
+        )
+
+        with urllib.request.urlopen(req) as response:
+            filename = target_name
+            if not filename:
+                content_disp = response.headers.get("Content-Disposition", "")
+                if "filename=" in content_disp:
+                    match = re.search(r'filename=["\']?([^"\';]+)', content_disp)
+                    if match:
+                        filename = match.group(1).strip()
+                if not filename:
+                    parsed = urllib.parse.urlparse(response.geturl())
+                    filename = Path(parsed.path).name or "downloaded_rom.zip"
+
+            dest_path = self.output_dir / filename
+            total_size = int(response.headers.get("Content-Length", 0))
+            downloaded = 0
+            chunk_size = 1024 * 1024  # 1MB chunks
+
+            print(f"[DOWNLOADER] Destination: {dest_path.name}")
+            if total_size > 0:
+                print(f"[DOWNLOADER] File Size: {total_size / (1024*1024):.2f} MB")
+
+            with open(dest_path, "wb") as f:
+                while True:
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total_size > 0:
+                        percent = (downloaded / total_size) * 100
+                        mb_done = downloaded / (1024 * 1024)
+                        mb_total = total_size / (1024 * 1024)
+                        sys.stdout.write(f"\r[PROGRESS] {mb_done:.1f}MB / {mb_total:.1f}MB ({percent:.1f}%)")
+                        sys.stdout.flush()
+
+            print("\n[DOWNLOADER] Download finished successfully.")
+            return dest_path
+
+    def _find_latest_download(self, expected_name: Optional[str]) -> Optional[Path]:
+        if expected_name and (self.output_dir / expected_name).exists():
+            return self.output_dir / expected_name
+        files = [p for p in self.output_dir.iterdir() if p.is_file() and not p.name.endswith(".aria2")]
+        if not files:
+            return None
+        return max(files, key=lambda f: f.stat().st_mtime)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python downloader.py <URL> [output_dir]")
+        sys.exit(1)
+    target_url = sys.argv[1]
+    out_dir = sys.argv[2] if len(sys.argv) > 2 else "./downloads"
+    downloader = UniversalDownloader(output_dir=out_dir)
+    res_path = downloader.download(target_url)
+    print(f"Result: {res_path}")
