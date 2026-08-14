@@ -105,7 +105,36 @@ class PartitionExtractor:
         lower_name = archive_path.lower()
 
         if lower_name.endswith((".tar.zst", ".tzst")):
-            subprocess.run(["tar", "-I", "zstd -T0", "-xf", archive_path, "-C", extract_dir], check=True)
+            unpacked = False
+            # Pass 1: native tar with zstd decompressor
+            if shutil.which("tar"):
+                try:
+                    subprocess.run(["tar", "-I", "zstd -T0", "-xf", archive_path, "-C", extract_dir], check=True)
+                    unpacked = True
+                except Exception:
+                    try:
+                        subprocess.run(["tar", "-xf", archive_path, "-C", extract_dir], check=True)
+                        unpacked = True
+                    except Exception:
+                        pass
+
+            # Pass 2: 7z CLI
+            if not unpacked and shutil.which("7z"):
+                try:
+                    subprocess.run(["7z", "x", "-mmt=on", "-y", f"-o{extract_dir}", archive_path], stdout=subprocess.DEVNULL, check=True)
+                    unpacked = True
+                except Exception:
+                    pass
+
+            # Pass 3: Python zstandard + tarfile
+            if not unpacked:
+                import tarfile
+                import zstandard
+                dctx = zstandard.ZstdDecompressor()
+                with open(archive_path, "rb") as ifh, dctx.stream_reader(ifh) as reader:
+                    with tarfile.open(fileobj=reader, mode="r|") as tar:
+                        tar.extractall(path=extract_dir)
+
         elif shutil.which("7z"):
             subprocess.run(["7z", "x", "-mmt=on", "-y", f"-o{extract_dir}", archive_path], stdout=subprocess.DEVNULL, check=True)
         elif shutil.which("unzip") and lower_name.endswith(".zip"):
