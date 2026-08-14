@@ -218,8 +218,8 @@ class FlashableBuilder:
             'unzip -o "$ZIPFILE" META-INF/bin/* -d /tmp >/dev/null 2>&1',
             "chmod 0755 /tmp/META-INF/bin/* 2>/dev/null",
             "",
-            'ui_print "============================================"',
             'ui_print "         Flashing Script By Mehraan"',
+            'ui_print "============================================"',
             f'ui_print "Device: {device}"',
             f'ui_print "Codename: {codename}"',
             f'ui_print "Version: {firmware}"',
@@ -335,8 +335,7 @@ class FlashableBuilder:
             "",
             'ui_print " "',
             'ui_print "============================================"',
-            'ui_print "Flashed Successfully!"',
-            'ui_print "Flashing Script By Mehraan"',
+            'ui_print "           Flashed Successfully!"',
             'ui_print "============================================"',
             "exit 0"
         ])
