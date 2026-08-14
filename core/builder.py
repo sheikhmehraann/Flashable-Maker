@@ -264,27 +264,41 @@ class FlashableBuilder:
         return "\n".join(sb)
 
     @classmethod
-    def package_zip_ultra_fast(cls, work_dir: str, output_zip: str):
+    def package_zip(cls, work_dir: str, output_zip: str, zip_level: int = 0):
         """
-        Creates the final ZIP package at NVMe write line rate using native 7z/zip STORE mode.
+        Creates the final ZIP package with selectable compression level:
+        - level 0: STORE mode (Ultra-fast, instant write)
+        - level 1-9: DEFLATE mode (level 9 = Maximum Ultra Compression)
         """
-        print(f"[*] [ZIP Packaging] Building final package: {output_zip}")
         abs_output = os.path.abspath(output_zip)
         if os.path.exists(abs_output):
             os.remove(abs_output)
 
+        print(f"[*] [ZIP Packaging] Building final package (Compression Level {zip_level}): {output_zip}")
+
         if shutil.which("7z"):
-            # -mx0 = Store (0 compression, instant write), -mmt=on = multi-threaded parallel blocks
-            cmd = ["7z", "a", "-tzip", "-mx0", "-mmt=on", abs_output, "."]
+            if zip_level > 0:
+                cmd = ["7z", "a", "-tzip", f"-mx{zip_level}", "-mfb=258", "-mpass=15", "-mmt=on", abs_output, "."]
+            else:
+                cmd = ["7z", "a", "-tzip", "-mx0", "-mmt=on", abs_output, "."]
             res = subprocess.run(cmd, cwd=work_dir, stdout=subprocess.DEVNULL)
             if res.returncode != 0:
                 raise RuntimeError(f"7z packaging failed with exit code {res.returncode}")
         elif shutil.which("zip"):
-            cmd = ["zip", "-0", "-q", "-r", abs_output, "."]
+            if zip_level > 0:
+                cmd = ["zip", f"-{zip_level}", "-q", "-r", abs_output, "."]
+            else:
+                cmd = ["zip", "-0", "-q", "-r", abs_output, "."]
             subprocess.run(cmd, cwd=work_dir, check=True)
         else:
             import zipfile
-            with zipfile.ZipFile(abs_output, "w", zipfile.ZIP_STORED) as z:
+            compression = zipfile.ZIP_DEFLATED if zip_level > 0 else zipfile.ZIP_STORED
+            compresslevel = zip_level if zip_level > 0 else None
+            kwargs = {"compression": compression}
+            if compresslevel is not None:
+                kwargs["compresslevel"] = compresslevel
+
+            with zipfile.ZipFile(abs_output, "w", **kwargs) as z:
                 for root, _, files in os.walk(work_dir):
                     for f in files:
                         fp = os.path.join(root, f)
@@ -301,7 +315,8 @@ class FlashableBuilder:
         codename: str,
         maintainer: str = "Mehraan",
         vbmeta_option: str = "skip",
-        zstd_level: int = 1
+        zstd_level: int = 1,
+        zip_level: int = 0
     ) -> str:
         """Executes full pipeline: zero-copy staging, parallel zstd, updater script, and fast ZIP."""
         work_dir = os.path.abspath("zip_workspace")
@@ -346,7 +361,7 @@ class FlashableBuilder:
         # Parallel Multi-Core ZSTD Compression for raw partitions
         if super_compress_tasks:
             workers = min(len(super_compress_tasks), os.cpu_count() or 4)
-            print(f"[*] [Parallel Zstd Engine] Launching {workers} workers (Level {zstd_level} --fast=1)...")
+            print(f"[*] [Parallel Zstd Engine] Launching {workers} workers (Level {zstd_level} --ultra)...")
             with ProcessPoolExecutor(max_workers=workers) as executor:
                 futures = [executor.submit(compress_single_image_worker, t) for t in super_compress_tasks]
                 for f in as_completed(futures):
@@ -389,8 +404,8 @@ class FlashableBuilder:
         with open(os.path.join(meta_dir, "updater-script"), "w", newline="\n") as f:
             f.write("# Dummy updater-script\n")
 
-        # Ultra-fast native packaging
-        cls.package_zip_ultra_fast(work_dir, output_zip)
+        # Native packaging
+        cls.package_zip(work_dir, output_zip, zip_level=zip_level)
         shutil.rmtree(work_dir, ignore_errors=True)
 
         size_mb = os.path.getsize(output_zip) / (1024 * 1024)

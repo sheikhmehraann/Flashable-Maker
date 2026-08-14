@@ -89,7 +89,15 @@ def main():
         "--zstd-level",
         type=int,
         default=1,
-        help="ZSTD compression level (0 = raw/no compression for max speed, 1 = ultra-fast 2.5GB/s, up to 22)"
+        help="ZSTD compression level (0 = raw/no compression for max speed, 1 = ultra-fast 2.5GB/s, up to 22 max compression)"
+    )
+
+    # ZIP Deflate Compression Level: 0 (Store) to 9 (Max Ultra Deflate)
+    parser.add_argument(
+        "--zip-level",
+        type=int,
+        default=0,
+        help="ZIP compression level (0 = Store mode for max speed, 1-9 = Deflate mode, 9 = Highest compression)"
     )
 
     # Cloud Upload
@@ -113,7 +121,8 @@ def main():
     print(f"  • Version     : {args.version}")
     print(f"  • Maintainer  : {args.maintainer}")
     print(f"  • VBmeta Mode : {args.vbmeta.upper()}")
-    print(f"  • Zstd Level  : {args.zstd_level} {'(Raw Pass-Through)' if args.zstd_level == 0 else '(Ultra-Fast Multi-Core)' if args.zstd_level == 1 else ''}")
+    print(f"  • Zstd Level  : {args.zstd_level} {'(Raw Pass-Through)' if args.zstd_level == 0 else '(Ultra-Fast Multi-Core)' if args.zstd_level == 1 else '(Highest Ultra Compression)' if args.zstd_level >= 20 else ''}")
+    print(f"  • ZIP Level   : {args.zip_level} {'(Store mode, Line Rate)' if args.zip_level == 0 else '(Max Deflate Compression)' if args.zip_level == 9 else ''}")
     print(f"  • Auto Upload : {args.upload.upper()}\n")
 
     work_space = Path(args.workspace).resolve()
@@ -167,7 +176,8 @@ def main():
         codename=args.codename,
         maintainer=args.maintainer,
         vbmeta_option=args.vbmeta,
-        zstd_level=args.zstd_level
+        zstd_level=args.zstd_level,
+        zip_level=args.zip_level
     )
 
     print("\n" + "═" * 65)
