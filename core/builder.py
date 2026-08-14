@@ -60,12 +60,14 @@ def compress_single_image_worker(task: Tuple[str, str, str, int, int]) -> Tuple[
     else:
         cmd = ["zstd", f"-{level}", "-T0", "-f", "-q", in_file, "-o", out_file]
 
-    if shutil.which("zstd"):
+    if shutil.which("zstd") or shutil.which("zstd.exe"):
+        z_bin = "zstd.exe" if shutil.which("zstd.exe") else "zstd"
+        cmd[0] = z_bin
         subprocess.run(cmd, check=True)
     else:
         import zstandard
-        c_level = max(1, min(level, 22))
-        cctx = zstandard.ZstdCompressor(level=c_level, threads=-1)
+        c_level = max(1, min(level, 19 if level > 19 else level))
+        cctx = zstandard.ZstdCompressor(level=c_level)
         with open(in_file, "rb") as ifh, open(out_file, "wb") as ofh:
             cctx.copy_stream(ifh, ofh)
     return name, raw_size
@@ -84,7 +86,8 @@ class FlashableBuilder:
         firmware_imgs: List[str],
         tr_specs: List[Tuple[str, int]],
         maintainer: str = "Mehraan",
-        vbmeta_option: str = "skip"
+        vbmeta_option: str = "skip",
+        use_zstd: bool = True
     ) -> str:
         """Generates dynamic updater-binary shell script."""
         sb = [
@@ -192,19 +195,12 @@ class FlashableBuilder:
             'unzip -o "$ZIPFILE" META-INF/bin/* -d /tmp >/dev/null 2>&1',
             "chmod 0755 /tmp/META-INF/bin/* 2>/dev/null",
             "",
-            'ui_print " "',
-            'ui_print "  __  __      _                              "',
-            'ui_print " |  \\/  | ___| |__  _ __ __ _  __ _ _ __  "',
-            'ui_print " | |\\/| |/ _ \\ \'_ \\| \'__/ _` |/ _` | \'_ \\ "',
-            'ui_print " | |  | |  __/ | | | | | (_| | (_| | | | |"',
-            'ui_print " |_|  |_|\\___|_| |_|_|  \\__,_|\\__,_|_| |_|"',
-            'ui_print " "',
             'ui_print "============================================"',
-            'ui_print "         Flashable ROM By Mehraan"',
-            f'ui_print "Device     : {device}"',
-            f'ui_print "Codename   : {codename}"',
-            f'ui_print "Version    : {firmware}"',
-            f'ui_print "Maintainer : {maintainer}"',
+            'ui_print "         Flashing Script By Mehraan"',
+            f'ui_print "Device: {device}"',
+            f'ui_print "Codename: {codename}"',
+            f'ui_print "Version: {firmware}"',
+            f'ui_print "Maintainer: {maintainer}"',
             'ui_print "============================================"',
             'ui_print " "',
             "checkDevice",
@@ -224,14 +220,20 @@ class FlashableBuilder:
             sb.append('ui_print " "')
             sb.append('ui_print "Patching firmware to both slot..."')
             for fw in firmware_imgs:
-                sb.append(f'flash_partition_both_slots "{fw}.img" "{fw}"')
+                if use_zstd:
+                    sb.append(f'flash_partition_zstd_both_slots "{fw}.img.zst" "{fw}"')
+                else:
+                    sb.append(f'flash_partition_both_slots "{fw}.img" "{fw}"')
             sb.append("")
 
         if system_imgs:
             sb.append('ui_print " "')
             sb.append('ui_print "Patching system..."')
             for sys_part in system_imgs:
-                sb.append(f'flash_partition_both_slots "{sys_part}.img" "{sys_part}"')
+                if use_zstd:
+                    sb.append(f'flash_partition_zstd_both_slots "{sys_part}.img.zst" "{sys_part}"')
+                else:
+                    sb.append(f'flash_partition_both_slots "{sys_part}.img" "{sys_part}"')
             sb.append("")
 
         # AVB 2.0 (vbmeta) snippet
@@ -283,10 +285,16 @@ class FlashableBuilder:
 
             sb.append("")
             for part, _ in super_specs:
-                sb.append(f'flash_partition_zstd "{part}.img.zst" "/dev/block/mapper/{part}$SLOT"')
+                if use_zstd:
+                    sb.append(f'flash_partition_zstd "{part}.img.zst" "/dev/block/mapper/{part}$SLOT"')
+                else:
+                    sb.append(f'flash_partition "{part}.img" "/dev/block/mapper/{part}$SLOT"')
 
             for part, _ in tr_specs:
-                sb.append(f'flash_partition_zstd "{part}.img.zst" "/dev/block/mapper/{part}$SLOT"')
+                if use_zstd:
+                    sb.append(f'flash_partition_zstd "{part}.img.zst" "/dev/block/mapper/{part}$SLOT"')
+                else:
+                    sb.append(f'flash_partition "{part}.img" "/dev/block/mapper/{part}$SLOT"')
 
         sb.extend([
             "",
@@ -361,17 +369,28 @@ class FlashableBuilder:
         meta_dir = os.path.join(work_dir, "META-INF", "com", "google", "android")
         os.makedirs(meta_dir, exist_ok=True)
 
-        super_compress_tasks = []
+        compress_tasks = []
         super_specs = []
         tr_specs = []
         system_imgs = []
         firmware_imgs = []
 
+        use_zstd = zstd_level > 0
+
         for name, info in partitions.items():
             src_path = info["path"]
             is_zst = info["is_zstd"]
 
-            if name in SUPER_PARTITIONS or name in SUPER_TR_PARTITIONS:
+            if name in SUPER_PARTITIONS:
+                super_specs.append((name, 0))
+            elif name in SUPER_TR_PARTITIONS:
+                tr_specs.append((name, 0))
+            elif name in SYSTEMS:
+                system_imgs.append(name)
+            else:
+                firmware_imgs.append(name)
+
+            if use_zstd:
                 target_file = os.path.join(work_dir, f"{name}.img.zst")
                 if is_zst:
                     # ZERO-COPY PASS-THROUGH (0.00 seconds)
@@ -379,33 +398,34 @@ class FlashableBuilder:
                     fast_stage_file(src_path, target_file)
                     raw_size = PartitionExtractor.get_zstd_uncompressed_size(src_path)
                     if name in SUPER_PARTITIONS:
-                        super_specs.append((name, raw_size))
-                    else:
-                        tr_specs.append((name, raw_size))
+                        super_specs = [(n, raw_size if n == name else s) for n, s in super_specs]
+                    elif name in SUPER_TR_PARTITIONS:
+                        tr_specs = [(n, raw_size if n == name else s) for n, s in tr_specs]
                 else:
                     raw_size = os.path.getsize(src_path)
-                    super_compress_tasks.append((name, src_path, target_file, zstd_level, raw_size))
-            elif name in SYSTEMS:
-                target_file = os.path.join(work_dir, f"{name}.img")
-                fast_stage_file(src_path, target_file)
-                system_imgs.append(name)
+                    compress_tasks.append((name, src_path, target_file, zstd_level, raw_size))
             else:
+                # Raw uncompressed mode
                 target_file = os.path.join(work_dir, f"{name}.img")
                 fast_stage_file(src_path, target_file)
-                firmware_imgs.append(name)
+                raw_size = os.path.getsize(src_path)
+                if name in SUPER_PARTITIONS:
+                    super_specs = [(n, raw_size if n == name else s) for n, s in super_specs]
+                elif name in SUPER_TR_PARTITIONS:
+                    tr_specs = [(n, raw_size if n == name else s) for n, s in tr_specs]
 
-        # Parallel Multi-Core ZSTD Compression for raw partitions
-        if super_compress_tasks:
-            workers = min(len(super_compress_tasks), os.cpu_count() or 4)
+        # Parallel Multi-Core ZSTD Compression for ALL raw partitions
+        if compress_tasks:
+            workers = min(len(compress_tasks), os.cpu_count() or 4)
             print(f"[*] [Parallel Zstd Engine] Launching {workers} workers (Level {zstd_level} --ultra)...")
             with ProcessPoolExecutor(max_workers=workers) as executor:
-                futures = [executor.submit(compress_single_image_worker, t) for t in super_compress_tasks]
+                futures = [executor.submit(compress_single_image_worker, t) for t in compress_tasks]
                 for f in as_completed(futures):
                     name, raw_size = f.result()
                     if name in SUPER_PARTITIONS:
-                        super_specs.append((name, raw_size))
-                    else:
-                        tr_specs.append((name, raw_size))
+                        super_specs = [(n, raw_size if n == name else s) for n, s in super_specs]
+                    elif name in SUPER_TR_PARTITIONS:
+                        tr_specs = [(n, raw_size if n == name else s) for n, s in tr_specs]
 
         # Stage static recovery ARM64 zstd binary and avbctl
         zstd_rec_path = os.path.join(work_dir, "META-INF", "zstd")
@@ -427,7 +447,7 @@ class FlashableBuilder:
         # Write updater scripts
         update_binary_content = cls.generate_update_binary(
             device, firmware, codename, super_specs, system_imgs, firmware_imgs, tr_specs,
-            maintainer=maintainer, vbmeta_option=vbmeta_option
+            maintainer=maintainer, vbmeta_option=vbmeta_option, use_zstd=use_zstd
         )
         update_binary_path = os.path.join(meta_dir, "update-binary")
         with open(update_binary_path, "w", newline="\n") as f:
