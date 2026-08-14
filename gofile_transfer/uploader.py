@@ -66,35 +66,11 @@ class GoFileUploader:
         return ["store1", "store2", "store3", "store-na-phx-1", "store-eu-par-1"]
 
     def get_fastest_server(self) -> str:
-        """Ping available servers in parallel with 1.5s timeout and select the lowest-latency store server."""
+        """Select the first active online store server from GoFile API list."""
         servers = self.get_server_list()
-        if not servers:
-            return "store1"
-
-        if len(servers) == 1:
+        if servers:
             return servers[0]
-
-        best_server = servers[0]
-        best_latency = float("inf")
-
-        def _ping_server(srv: str):
-            try:
-                t0 = time.perf_counter()
-                r = requests.head(f"https://{srv}.gofile.io", timeout=2.0)
-                latency = time.perf_counter() - t0
-                return srv, latency
-            except Exception:
-                return srv, float("inf")
-
-        with ThreadPoolExecutor(max_workers=min(len(servers), 16)) as executor:
-            futures = [executor.submit(_ping_server, s) for s in servers]
-            for future in as_completed(futures):
-                srv, lat = future.result()
-                if lat < best_latency:
-                    best_latency = lat
-                    best_server = srv
-
-        return best_server
+        return "store1"
 
     def get_best_server(self) -> str:
         return self.get_fastest_server()
@@ -133,11 +109,9 @@ class GoFileUploader:
         cmd = [
             curl_bin,
             "-s",
-            "--tcp-nodelay",
-            "-H", "Expect:",
-            "--buffer-size", "16777216",
+            "-k",
             "-X", "POST",
-            "-F", f"file=@{file_path};filename={filename}"
+            "-F", f"file=@{file_path}"
         ]
         if folder_id:
             cmd.extend(["-F", f"folderId={folder_id}"])

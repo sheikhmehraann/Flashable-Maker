@@ -20,7 +20,7 @@ on:
       rom_version:
         description: 'ROM Version'
         required: true
-        default: '15.1.2.180SP05'
+        default: '15.1.2.180SP05OP001PF001AZ'
         type: string
       maintainer:
         description: 'Maintainer'
@@ -32,14 +32,19 @@ on:
         required: true
         type: choice
         options:
-          - 'skip'
-          - 'disable'
           - 'enable'
-        default: 'skip'
+          - 'disable'
+          - 'skip'
+        default: 'enable'
       zstd_level:
-        description: 'ZSTD Compression Level (0 = raw pass-through, 1 = ultra-fast 2.5GB/s, up to 22)'
+        description: 'ZSTD Compression Level (0 = raw pass-through, 1 = fast, 22 = ultra-compressed)'
         required: true
-        default: '1'
+        default: '22'
+        type: string
+      zip_level:
+        description: 'ZIP Deflate Level (0 = store mode, 9 = max compression)'
+        required: true
+        default: '9'
         type: string
 
 jobs:
@@ -83,5 +88,21 @@ jobs:
             --maintainer "${{ github.event.inputs.maintainer }}" \
             --vbmeta "${{ github.event.inputs.vbmeta_option }}" \
             --zstd-level "${{ github.event.inputs.zstd_level }}" \
+            --zip-level "${{ github.event.inputs.zip_level }}" \
             --upload "gofile" \
             --output "./output"
+
+      - name: Post Job Summary
+        if: always()
+        run: |
+          echo "## ⚡ Flashable ROM Package Ready" >> $GITHUB_STEP_SUMMARY
+          echo "- **Device**: ${{ github.event.inputs.device_name }} (\`${{ github.event.inputs.device_codename }}\`)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: \`${{ github.event.inputs.rom_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Maintainer**: ${{ github.event.inputs.maintainer }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **AVB Vbmeta Mode**: \`${{ github.event.inputs.vbmeta_option }}\`" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ steps.build_step.outputs.download_page }}" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🚀 [Download Flashable ZIP from GoFile](${{ steps.build_step.outputs.download_page }})" >> $GITHUB_STEP_SUMMARY
+            echo "**File Name**: \`${{ steps.build_step.outputs.zip_name }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "**GoFile Link**: [${{ steps.build_step.outputs.download_page }}](${{ steps.build_step.outputs.download_page }})" >> $GITHUB_STEP_SUMMARY
+          fi
