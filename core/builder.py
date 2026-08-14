@@ -99,6 +99,17 @@ class FlashableBuilder:
             '    printf \'ui_print %s\\nui_print\\n\' "$1" >>"$OUTFD"',
             "}",
             "",
+            "find_block_device() {",
+            '    name="$1"',
+            '    for base in /dev/block/by-name /dev/block/bootdevice/by-name /dev/block/platform/*/by-name; do',
+            '        if [ -e "$base/$name" ]; then',
+            '            echo "$base/$name"',
+            '            return 0',
+            '        fi',
+            '    done',
+            '    echo "/dev/block/by-name/$name"',
+            "}",
+            "",
             "flash_partition() {",
             '    src="$1"; dest="$2"; msg="$3"',
             '    if [ "$#" -lt 3 ]; then',
@@ -125,21 +136,31 @@ class FlashableBuilder:
             "",
             "flash_partition_both_slots() {",
             '    img_file="$1"; base_name="$2"',
-            '    if [ -e "/dev/block/by-name/${base_name}_a" ] || [ -e "/dev/block/by-name/${base_name}_b" ]; then',
-            '        flash_partition "$img_file" "/dev/block/by-name/${base_name}_a" "- Flashing partition ${base_name} to both slots"',
-            '        flash_partition "$img_file" "/dev/block/by-name/${base_name}_b" ""',
+            '    dev_a=$(find_block_device "${base_name}_a")',
+            '    dev_b=$(find_block_device "${base_name}_b")',
+            '    if [ -e "$dev_a" ] || [ -e "$dev_b" ]; then',
+            '        ui_print "- Flashing partition ${base_name} to both slots"',
+            '        [ -e "$dev_a" ] && { unzip -p "$ZIPFILE" "$img_file" >"$dev_a" || { ui_print "Error: Failed flashing $img_file to $dev_a"; exit 1; }; }',
+            '        [ -e "$dev_b" ] && { unzip -p "$ZIPFILE" "$img_file" >"$dev_b" || { ui_print "Error: Failed flashing $img_file to $dev_b"; exit 1; }; }',
             '    else',
-            '        flash_partition "$img_file" "/dev/block/by-name/${base_name}" "- Flashing partition ${base_name}"',
+            '        dev_single=$(find_block_device "${base_name}")',
+            '        ui_print "- Flashing partition ${base_name}"',
+            '        unzip -p "$ZIPFILE" "$img_file" >"$dev_single" || { ui_print "Error: Failed flashing $img_file to $dev_single"; exit 1; }',
             '    fi',
             "}",
             "",
             "flash_partition_zstd_both_slots() {",
             '    img_file="$1"; base_name="$2"',
-            '    if [ -e "/dev/block/by-name/${base_name}_a" ] || [ -e "/dev/block/by-name/${base_name}_b" ]; then',
-            '        flash_partition_zstd "$img_file" "/dev/block/by-name/${base_name}_a" "- Flashing partition ${base_name} to both slots"',
-            '        flash_partition_zstd "$img_file" "/dev/block/by-name/${base_name}_b" ""',
+            '    dev_a=$(find_block_device "${base_name}_a")',
+            '    dev_b=$(find_block_device "${base_name}_b")',
+            '    if [ -e "$dev_a" ] || [ -e "$dev_b" ]; then',
+            '        ui_print "- Flashing partition ${base_name} to both slots"',
+            '        [ -e "$dev_a" ] && { unzip -p "$ZIPFILE" "$img_file" | /tmp/META-INF/zstd -c -d -T0 --no-check >"$dev_a" || { ui_print "Error: Failed flashing $img_file to $dev_a"; exit 1; }; }',
+            '        [ -e "$dev_b" ] && { unzip -p "$ZIPFILE" "$img_file" | /tmp/META-INF/zstd -c -d -T0 --no-check >"$dev_b" || { ui_print "Error: Failed flashing $img_file to $dev_b"; exit 1; }; }',
             '    else',
-            '        flash_partition_zstd "$img_file" "/dev/block/by-name/${base_name}" "- Flashing partition ${base_name}"',
+            '        dev_single=$(find_block_device "${base_name}")',
+            '        ui_print "- Flashing partition ${base_name}"',
+            '        unzip -p "$ZIPFILE" "$img_file" | /tmp/META-INF/zstd -c -d -T0 --no-check >"$dev_single" || { ui_print "Error: Failed flashing $img_file to $dev_single"; exit 1; }',
             '    fi',
             "}",
             "",
@@ -159,8 +180,8 @@ class FlashableBuilder:
             '    [ -z "$myDevice" ] && myDevice=$(getprop ro.product.name)',
             f'    romDevice="{codename}"',
             '    if [ -z "$(echo "$myDevice" | grep -i "$romDevice")" ]; then',
-            '        ui_print "- Device code verification failed. Please double-check if this package matches your device model."',
-            '        ui_print "- Flashing the wrong package may cause bricking. Do you wish to continue flashing?"',
+            '        ui_print "- Device verification: Target model mismatch! Current: $myDevice, Expected: $romDevice"',
+            '        ui_print "- Flashing wrong package may cause bricking. Do you wish to continue?"',
             '        if ! getVolumeKey; then ui_print "- You chose to abort flashing."; exit 1;',
             '        else ui_print "- You chose to continue flashing."; fi',
             '    fi',
@@ -169,7 +190,7 @@ class FlashableBuilder:
             "checkExit() {",
             '    status=$?',
             '    if [ "$status" -ne 0 ]; then',
-            '        ui_print "Error: Exit status $status detected. There may be an issue with your super partition. Flash stock super.img first, then retry."',
+            '        ui_print "Error: Dynamic partition operation failed. Please flash stock super.img first, then retry."',
             '        exit 1',
             '    fi',
             "}",
@@ -427,22 +448,30 @@ class FlashableBuilder:
                     elif name in SUPER_TR_PARTITIONS:
                         tr_specs = [(n, raw_size if n == name else s) for n, s in tr_specs]
 
-        # Stage static recovery ARM64 zstd binary and avbctl
-        zstd_rec_path = os.path.join(work_dir, "META-INF", "zstd")
+        # Stage static recovery ARM64 zstd binary only when compression is used
         script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        zstd_src = os.path.join(script_dir, "bin", "zstd-arm64")
-        if os.path.exists(zstd_src):
-            fast_stage_file(zstd_src, zstd_rec_path)
-        else:
-            with open(zstd_rec_path, "wb") as f:
-                f.write(b"")
+        if use_zstd:
+            zstd_rec_path = os.path.join(work_dir, "META-INF", "zstd")
+            zstd_src = os.path.join(script_dir, "bin", "zstd-arm64")
+            if os.path.exists(zstd_src):
+                fast_stage_file(zstd_src, zstd_rec_path)
 
+        # Stage ONLY required helper binaries (lptools for super/dynamic, avbctl for vbmeta toggle)
         bin_dir_target = os.path.join(work_dir, "META-INF", "bin")
-        os.makedirs(bin_dir_target, exist_ok=True)
         bin_dir_src = os.path.join(script_dir, "bin", "device")
-        if os.path.exists(bin_dir_src):
-            for b in os.listdir(bin_dir_src):
-                fast_stage_file(os.path.join(bin_dir_src, b), os.path.join(bin_dir_target, b))
+
+        needed_bins = []
+        if super_specs or tr_specs:
+            needed_bins.append("lptools")
+        if vbmeta_option in ("disable", "enable"):
+            needed_bins.append("avbctl")
+
+        if needed_bins and os.path.exists(bin_dir_src):
+            os.makedirs(bin_dir_target, exist_ok=True)
+            for b in needed_bins:
+                b_src = os.path.join(bin_dir_src, b)
+                if os.path.exists(b_src):
+                    fast_stage_file(b_src, os.path.join(bin_dir_target, b))
 
         # Write updater scripts
         update_binary_content = cls.generate_update_binary(
