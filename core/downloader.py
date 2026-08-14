@@ -43,17 +43,22 @@ class UniversalDownloader:
             direct_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
             return direct_url, None, None
 
-        # 2. SourceForge Links (Convert to direct downloads.sourceforge.net CDN mirror)
+        # 2. SourceForge Links (Generate multi-mirror URLs for maximum parallel bandwidth)
         if "sourceforge.net" in url:
             clean_url = url.split("?")[0]
             parts = [p for p in clean_url.split("/") if p and p != "download"]
             fname = parts[-1] if parts and ("." in parts[-1]) else None
-            # Convert https://sourceforge.net/projects/<proj>/files/<subpath> -> https://downloads.sourceforge.net/project/<proj>/<subpath>
             match = re.search(r"sourceforge\.net/projects/([^/]+)/files/(.+)", clean_url)
             if match:
                 proj = match.group(1)
                 subpath = match.group(2).rstrip("/").removesuffix("/download")
-                direct_url = f"https://downloads.sourceforge.net/project/{proj}/{subpath}"
+                mirrors = [
+                    f"https://downloads.sourceforge.net/project/{proj}/{subpath}",
+                    f"https://master.dl.sourceforge.net/project/{proj}/{subpath}",
+                    f"https://netcologne.dl.sourceforge.net/project/{proj}/{subpath}",
+                    f"https://jaist.dl.sourceforge.net/project/{proj}/{subpath}"
+                ]
+                return mirrors[0], fname, {"mirrors": mirrors}
             elif not url.endswith("/download") and not "files" in url:
                 direct_url = url.rstrip("/") + "/files/latest/download"
             else:
@@ -93,24 +98,27 @@ class UniversalDownloader:
 
     def download(self, url: str, custom_filename: Optional[str] = None) -> Path:
         """
-        Executes download using aria2c (fastest) with automatic fallbacks.
+        Executes download using aria2c (fastest) with automatic multi-mirror parallel sockets.
         Returns the absolute path to the downloaded file.
         """
         print(f"\n[DOWNLOADER] Initializing download for: {url}")
-        direct_url, resolved_name, headers = self.resolve_url(url)
+        direct_url, resolved_name, extra = self.resolve_url(url)
         target_name = custom_filename or resolved_name or "downloaded_package.bin"
-        print(f"[DOWNLOADER] Target URL  : {direct_url}")
-        print(f"[DOWNLOADER] Target File : {target_name}")
+        mirrors = (extra and extra.get("mirrors")) or [direct_url]
 
-        # Strategy A: aria2c (multi-threaded, 16 connections, no pre-allocation lag)
+        print(f"[DOWNLOADER] Primary URL  : {direct_url}")
+        print(f"[DOWNLOADER] Target File  : {target_name}")
+        print(f"[DOWNLOADER] Active Mirrors: {len(mirrors)}")
+
+        # Strategy A: aria2c (multi-threaded, 16 connections per server across all mirrors)
         if self.has_aria2:
-            print(f"[DOWNLOADER] Multi-thread accelerator active ({self.max_connections} parallel streams)...")
+            print(f"[DOWNLOADER] Multi-thread accelerator active (16 parallel streams per mirror)...")
             cmd = [
                 "aria2c",
                 "--console-log-level=warn",
-                "--summary-interval=3",
-                f"--max-connection-per-server={self.max_connections}",
-                f"--split={self.max_connections}",
+                "--summary-interval=1",
+                "--max-connection-per-server=16",
+                "--split=32",
                 "--min-split-size=1M",
                 "--stream-piece-selector=geom",
                 "--file-allocation=none",
@@ -118,11 +126,13 @@ class UniversalDownloader:
                 "--allow-overwrite=true",
                 "--check-certificate=false",
                 '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                f"--dir={self.output_dir}",
-                direct_url
+                f"--dir={self.output_dir}"
             ]
             if target_name:
                 cmd.append(f"--out={target_name}")
+
+            # Add all mirror URLs
+            cmd.extend(mirrors)
 
             res = subprocess.run(cmd)
             if res.returncode == 0:
