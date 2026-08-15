@@ -36,8 +36,22 @@ class CloudUploader:
             req = urllib.request.Request("https://api.gofile.io/servers", headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-                if data.get("status") == "ok" and data.get("data", {}).get("servers"):
-                    server = data["data"]["servers"][0]["name"]
+                if data.get("status") == "ok":
+                    server_data = data.get("data", {})
+                    servers = server_data.get("servers", [])
+                    if isinstance(servers, list) and servers:
+                        for s in servers:
+                            if isinstance(s, dict) and s.get("status") == "online" and s.get("name"):
+                                server = s["name"]
+                                break
+                            elif isinstance(s, dict) and s.get("name"):
+                                server = s["name"]
+                                break
+                            elif isinstance(s, str):
+                                server = s
+                                break
+                    elif isinstance(server_data.get("server"), str):
+                        server = server_data["server"]
         except Exception as e:
             print(f"[GOFILE] Warning: Could not fetch server list ({e}), using default '{server}'")
 

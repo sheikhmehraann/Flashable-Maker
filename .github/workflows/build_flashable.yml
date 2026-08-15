@@ -76,6 +76,7 @@ jobs:
         run: |
           chmod -R +x bin/host/ || true
           chmod -R +x bin/device/ || true
+          chmod +x bin/zstd-arm64 || true
 
       - name: Run Build Pipeline & Upload to Gofile
         id: build_step
