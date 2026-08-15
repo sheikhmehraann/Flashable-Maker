@@ -121,4 +121,3 @@ if [ -f "$AVB_BIN" ]; then
 fi
 """
         return ""
-        return ""

@@ -89,7 +89,7 @@ class FlashableBuilder:
         vbmeta_option: str = "skip",
         use_zstd: bool = True
     ) -> str:
-        """Generates dynamic updater-binary shell script."""
+        """Generates dynamic updater-binary shell script with bulletproof logical partition handling."""
         sb = [
             "#!/sbin/sh",
             "OUTFD=/proc/self/fd/$2",
@@ -98,6 +98,18 @@ class FlashableBuilder:
             "ui_print() {",
             '    printf \'ui_print %s\\nui_print\\n\' "$1" >>"$OUTFD"',
             "}",
+            "",
+            "# Prioritize bundled recovery binaries in PATH",
+            'export PATH="/tmp/META-INF/bin:/tmp/META-INF:/sbin:/system/bin:/bin:$PATH"',
+            "",
+            'LPTOOLS="/tmp/META-INF/bin/lptools"',
+            '[ ! -f "$LPTOOLS" ] && LPTOOLS="lptools"',
+            "",
+            'ZSTD_BIN="/tmp/META-INF/zstd"',
+            '[ ! -f "$ZSTD_BIN" ] && ZSTD_BIN="zstd"',
+            "",
+            'AVB_BIN="/tmp/META-INF/bin/avbctl"',
+            '[ ! -f "$AVB_BIN" ] && AVB_BIN="avbctl"',
             "",
             "find_block_device() {",
             '    name="$1"',
@@ -110,10 +122,21 @@ class FlashableBuilder:
             '    echo "/dev/block/by-name/$name"',
             "}",
             "",
+            "find_mapper_device() {",
+            '    name="$1"',
+            '    for base in /dev/block/mapper /dev/mapper; do',
+            '        if [ -e "$base/$name" ]; then',
+            '            echo "$base/$name"',
+            '            return 0',
+            '        fi',
+            '    done',
+            '    echo "/dev/block/mapper/$name"',
+            "}",
+            "",
             "flash_partition() {",
             '    src="$1"; dest="$2"; msg="$3"',
             '    if [ "$#" -lt 3 ]; then',
-            '        partition_name=$(echo "$dest" | cut -d \'/\' -f 5)',
+            '        partition_name=$(basename "$dest")',
             '        ui_print "- Flashing partition $partition_name"',
             '    elif [ -n "$msg" ]; then',
             '        ui_print "$msg"',
@@ -126,9 +149,9 @@ class FlashableBuilder:
             "",
             "flash_partition_zstd() {",
             '    src="$1"; dest="$2"',
-            '    partition_name=$(echo "$dest" | cut -d \'/\' -f 5)',
+            '    partition_name=$(basename "$dest")',
             '    ui_print "- Flashing partition $partition_name"',
-            '    unzip -p "$ZIPFILE" "$src" | /tmp/META-INF/zstd -c -d -T0 --no-check >"$dest" || {',
+            '    unzip -p "$ZIPFILE" "$src" | $ZSTD_BIN -c -d -T0 --no-check >"$dest" || {',
             '        ui_print "Error: Failed to flash compressed $src to $dest"',
             '        exit 1',
             '    }',
@@ -155,12 +178,12 @@ class FlashableBuilder:
             '    dev_b=$(find_block_device "${base_name}_b")',
             '    if [ -e "$dev_a" ] || [ -e "$dev_b" ]; then',
             '        ui_print "- Flashing partition ${base_name} to both slots"',
-            '        [ -e "$dev_a" ] && { unzip -p "$ZIPFILE" "$img_file" | /tmp/META-INF/zstd -c -d -T0 --no-check >"$dev_a" || { ui_print "Error: Failed flashing $img_file to $dev_a"; exit 1; }; }',
-            '        [ -e "$dev_b" ] && { unzip -p "$ZIPFILE" "$img_file" | /tmp/META-INF/zstd -c -d -T0 --no-check >"$dev_b" || { ui_print "Error: Failed flashing $img_file to $dev_b"; exit 1; }; }',
+            '        [ -e "$dev_a" ] && { unzip -p "$ZIPFILE" "$img_file" | $ZSTD_BIN -c -d -T0 --no-check >"$dev_a" || { ui_print "Error: Failed flashing $img_file to $dev_a"; exit 1; }; }',
+            '        [ -e "$dev_b" ] && { unzip -p "$ZIPFILE" "$img_file" | $ZSTD_BIN -c -d -T0 --no-check >"$dev_b" || { ui_print "Error: Failed flashing $img_file to $dev_b"; exit 1; }; }',
             '    else',
             '        dev_single=$(find_block_device "${base_name}")',
             '        ui_print "- Flashing partition ${base_name}"',
-            '        unzip -p "$ZIPFILE" "$img_file" | /tmp/META-INF/zstd -c -d -T0 --no-check >"$dev_single" || { ui_print "Error: Failed flashing $img_file to $dev_single"; exit 1; }',
+            '        unzip -p "$ZIPFILE" "$img_file" | $ZSTD_BIN -c -d -T0 --no-check >"$dev_single" || { ui_print "Error: Failed flashing $img_file to $dev_single"; exit 1; }',
             '    fi',
             "}",
             "",
@@ -191,26 +214,77 @@ class FlashableBuilder:
             "",
             "checkExit() {",
             '    status=$?',
+            '    msg="$1"',
             '    if [ "$status" -ne 0 ]; then',
-            '        ui_print "Error: Dynamic partition operation failed. Please flash stock super.img first, then retry."',
+            '        if [ -n "$msg" ]; then',
+            '            ui_print "Error: $msg (exit status $status)"',
+            '        else',
+            '            ui_print "Error: Dynamic partition operation failed. Please flash stock super.img first, then retry."',
+            '        fi',
             '        exit 1',
             '    fi',
             "}",
             "",
             "unmountPartitions() {",
-            '    umount /system /system_root /vendor /product /system_ext /vendor_dlkm /odm_dlkm /odm \\',
-            '           /tr_carrier /tr_company /tr_mi /tr_preload /tr_product /tr_region /tr_theme \\',
-            '           /tr_manifest /tr_misc 2>/dev/null',
+            '    umount -f -l /system /system_root /vendor /product /system_ext /vendor_dlkm /odm_dlkm /odm \\',
+            '                 /tr_carrier /tr_company /tr_mi /tr_preload /tr_product /tr_region /tr_theme \\',
+            '                 /tr_manifest /tr_misc /mnt/* 2>/dev/null || true',
             "}",
             "",
             "manage_logical_partition() {",
-            '    op="$1"; part="$2"; size="$3"; slot="$4"',
-            '    case "$op" in',
-            '        clear) lptools unmap "$part$slot" && lptools remove "$part$slot" ;;',
-            '        create) lptools create "$part$slot" "$size" || checkExit ;;',
-            '        create_optional) lptools create "$part$slot" "$size" || true ;;',
-            '        map) lptools map "$part$slot" || checkExit ;;',
+            '    operation="$1"',
+            '    partition="$2"',
+            '    size="$3"',
+            '    slot="$4"',
+            '    case "$operation" in',
+            '        clear)',
+            '            $LPTOOLS unmap "$partition$slot" 2>/dev/null || true',
+            '            $LPTOOLS remove "$partition$slot" 2>/dev/null || true',
+            '            ;;',
+            '        create)',
+            '            $LPTOOLS create "$partition$slot" "$size" || checkExit "Failed to create logical partition $partition$slot (size: $size bytes)"',
+            '            ;;',
+            '        create_optional)',
+            '            $LPTOOLS create "$partition$slot" "$size" 2>/dev/null || true',
+            '            ;;',
+            '        map)',
+            '            $LPTOOLS map "$partition$slot" || checkExit "Failed to map logical partition $partition$slot"',
+            '            ;;',
+            '        unmap_map)',
+            '            $LPTOOLS unmap "$partition$slot" 2>/dev/null || true',
+            '            $LPTOOLS map "$partition$slot" || checkExit "Failed to remap logical partition $partition$slot"',
+            '            ;;',
             '    esac',
+            "}",
+            "",
+            "create_partitions_for_slot() {",
+            '    target_slot="$1"',
+            '    other_slot="$2"',
+            '    shift 2',
+            '    for spec in "$@"; do',
+            '        partition="${spec%%:*}"',
+            '        size="${spec#*:}"',
+            '        manage_logical_partition "create" "$partition" "$size" "$target_slot"',
+            '        manage_logical_partition "create_optional" "$partition" "0" "$other_slot"',
+            '    done',
+            "}",
+            "",
+            "process_partitions_for_slots() {",
+            '    operation="$1"',
+            '    shift',
+            '    for partition in "$@"; do',
+            '        manage_logical_partition "$operation" "$partition" "" "_a"',
+            '        manage_logical_partition "$operation" "$partition" "" "_b"',
+            '    done',
+            "}",
+            "",
+            "process_partitions_for_slot() {",
+            '    operation="$1"',
+            '    slot="$2"',
+            '    shift 2',
+            '    for partition in "$@"; do',
+            '        manage_logical_partition "$operation" "$partition" "" "$slot"',
+            '    done',
             "}",
             "",
             'unzip -o "$ZIPFILE" META-INF/zstd -d /tmp >/dev/null 2>&1',
@@ -236,10 +310,9 @@ class FlashableBuilder:
             '[ "$SLOT" = "_a" ] && OTHER_SLOT="_b"',
             'slot_display="A"',
             '[ "$SLOT" = "_b" ] && slot_display="B"',
-            '[ -z "$SLOT" ] && slot_display="A-Only"',
+            '[ -z "$SLOT" ] && { slot_display="A-Only"; SLOT=""; OTHER_SLOT=""; }',
             'ui_print "- Active Boot Slot : Slot ${slot_display}"',
-            "lptools clear-cow",
-            "checkExit",
+            "$LPTOOLS clear-cow 2>/dev/null || lptools clear-cow 2>/dev/null || true",
             ""
         ]
 
@@ -268,8 +341,6 @@ class FlashableBuilder:
             sb.extend([
                 'ui_print " "',
                 'ui_print "- Configuring AVB 2.0 (Vbmeta)"',
-                'AVB_BIN="/tmp/META-INF/bin/avbctl"',
-                '[ ! -f "$AVB_BIN" ] && AVB_BIN="avbctl"',
                 'if [ -f "$AVB_BIN" ] || which avbctl >/dev/null 2>&1; then',
                 '    VERITY=$($AVB_BIN get-verity 2>/dev/null)',
                 '    if echo "$VERITY" | grep -qi "disabled"; then',
@@ -286,8 +357,6 @@ class FlashableBuilder:
             sb.extend([
                 'ui_print " "',
                 'ui_print "- Configuring AVB 2.0 (Vbmeta)"',
-                'AVB_BIN="/tmp/META-INF/bin/avbctl"',
-                '[ ! -f "$AVB_BIN" ] && AVB_BIN="avbctl"',
                 'if [ -f "$AVB_BIN" ] || which avbctl >/dev/null 2>&1; then',
                 '    VERITY=$($AVB_BIN get-verity 2>/dev/null)',
                 '    if echo "$VERITY" | grep -qi "enabled"; then',
@@ -301,37 +370,36 @@ class FlashableBuilder:
                 ""
             ])
 
-        all_super = [p[0] for p in super_specs] + [p[0] for p in tr_specs]
-        if all_super:
+        all_dyn_specs = super_specs + tr_specs
+        if all_dyn_specs:
             sb.append('ui_print " "')
             sb.append('ui_print "Patching super partitions"')
-            for part in all_super:
-                sb.append(f'manage_logical_partition "clear" "{part}" "" "_a"')
-                sb.append(f'manage_logical_partition "clear" "{part}" "" "_b"')
+            
+            # Step 1: Clear existing logical partitions across both slots
+            clear_parts = " ".join(f'"{p[0]}"' for p in all_dyn_specs)
+            sb.append(f'process_partitions_for_slots "clear" {clear_parts}')
+            sb.append("")
 
-            for part, size in super_specs:
-                sb.append(f'manage_logical_partition "create" "{part}" "{size}" "$SLOT"')
-                sb.append(f'manage_logical_partition "create_optional" "{part}" "0" "$OTHER_SLOT"')
+            # Step 2: Create logical partitions for active slot and 0-byte for other slot
+            create_specs = " ".join(f'"{p[0]}:{p[1]}"' for p in all_dyn_specs)
+            sb.append(f'create_partitions_for_slot "$SLOT" "$OTHER_SLOT" {create_specs}')
+            sb.append("")
 
-            for part, size in tr_specs:
-                sb.append(f'manage_logical_partition "create" "{part}" "{size}" "$SLOT"')
-                sb.append(f'manage_logical_partition "create_optional" "{part}" "0" "$OTHER_SLOT"')
+            # Step 3: Map logical partitions on active slot
+            map_parts = " ".join(f'"{p[0]}"' for p in all_dyn_specs)
+            sb.append(f'process_partitions_for_slot "map" "$SLOT" {map_parts}')
+            sb.append("")
 
-            for part in all_super:
-                sb.append(f'manage_logical_partition "map" "{part}" "" "$SLOT"')
+            # Step 4: Stream flash decompressed images directly to mapper block devices
+            for part, _ in all_dyn_specs:
+                if use_zstd:
+                    sb.append(f'flash_partition_zstd "{part}.img.zst" "$(find_mapper_device {part}$SLOT)"')
+                else:
+                    sb.append(f'flash_partition "{part}.img" "$(find_mapper_device {part}$SLOT)"')
 
             sb.append("")
-            for part, _ in super_specs:
-                if use_zstd:
-                    sb.append(f'flash_partition_zstd "{part}.img.zst" "/dev/block/mapper/{part}$SLOT"')
-                else:
-                    sb.append(f'flash_partition "{part}.img" "/dev/block/mapper/{part}$SLOT"')
-
-            for part, _ in tr_specs:
-                if use_zstd:
-                    sb.append(f'flash_partition_zstd "{part}.img.zst" "/dev/block/mapper/{part}$SLOT"')
-                else:
-                    sb.append(f'flash_partition "{part}.img" "/dev/block/mapper/{part}$SLOT"')
+            # Step 5: Final target-slot unmapping and mapping to sync kernel device-mapper tables for clean recovery mounting
+            sb.append(f'process_partitions_for_slot "unmap_map" "$SLOT" {map_parts}')
 
         sb.extend([
             "",
@@ -420,10 +488,15 @@ class FlashableBuilder:
             src_path = info["path"]
             is_zst = info["is_zstd"]
 
+            if is_zst:
+                raw_size = PartitionExtractor.get_zstd_uncompressed_size(src_path)
+            else:
+                raw_size = os.path.getsize(src_path)
+
             if name in SUPER_PARTITIONS:
-                super_specs.append((name, 0))
+                super_specs.append((name, raw_size))
             elif name in SUPER_TR_PARTITIONS:
-                tr_specs.append((name, 0))
+                tr_specs.append((name, raw_size))
             elif name in SYSTEMS:
                 system_imgs.append(name)
             else:
@@ -433,27 +506,16 @@ class FlashableBuilder:
                 target_file = os.path.join(work_dir, f"{name}.img.zst")
                 if is_zst:
                     # ZERO-COPY PASS-THROUGH (0.00 seconds)
-                    print(f"[*] [Zero-Copy] Pre-compressed: {name}.img.zst -> Pass-Through staged.")
+                    print(f"[*] [Zero-Copy] Pre-compressed: {name}.img.zst -> Pass-Through staged (Size: {raw_size} bytes).")
                     fast_stage_file(src_path, target_file)
-                    raw_size = PartitionExtractor.get_zstd_uncompressed_size(src_path)
-                    if name in SUPER_PARTITIONS:
-                        super_specs = [(n, raw_size if n == name else s) for n, s in super_specs]
-                    elif name in SUPER_TR_PARTITIONS:
-                        tr_specs = [(n, raw_size if n == name else s) for n, s in tr_specs]
                 else:
-                    raw_size = os.path.getsize(src_path)
                     compress_tasks.append((name, src_path, target_file, zstd_level, raw_size))
             else:
                 # Raw uncompressed mode
                 target_file = os.path.join(work_dir, f"{name}.img")
                 fast_stage_file(src_path, target_file)
-                raw_size = os.path.getsize(src_path)
-                if name in SUPER_PARTITIONS:
-                    super_specs = [(n, raw_size if n == name else s) for n, s in super_specs]
-                elif name in SUPER_TR_PARTITIONS:
-                    tr_specs = [(n, raw_size if n == name else s) for n, s in tr_specs]
 
-        # Parallel Multi-Core ZSTD Compression for ALL raw partitions
+        # Parallel Multi-Core ZSTD Compression for raw partitions
         if compress_tasks:
             workers = min(len(compress_tasks), os.cpu_count() or 4)
             print(f"[*] [Parallel Zstd Engine] Launching {workers} workers (Level {zstd_level} --ultra)...")
@@ -471,6 +533,8 @@ class FlashableBuilder:
         if use_zstd:
             zstd_rec_path = os.path.join(work_dir, "META-INF", "zstd")
             zstd_src = os.path.join(script_dir, "bin", "zstd-arm64")
+            if not os.path.exists(zstd_src):
+                zstd_src = os.path.join(script_dir, "bin", "device", "zstd-arm64")
             if os.path.exists(zstd_src):
                 fast_stage_file(zstd_src, zstd_rec_path)
 
