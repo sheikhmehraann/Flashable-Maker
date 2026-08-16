@@ -167,8 +167,13 @@ class FlashableBuilder:
             '        [ -e "$dev_b" ] && { unzip -p "$ZIPFILE" "$img_file" >"$dev_b" || { ui_print "Error: Failed flashing $img_file to $dev_b"; exit 1; }; }',
             '    else',
             '        dev_single=$(find_block_device "${base_name}")',
-            '        ui_print "- Flashing partition ${base_name}"',
-            '        unzip -p "$ZIPFILE" "$img_file" >"$dev_single" || { ui_print "Error: Failed flashing $img_file to $dev_single"; exit 1; }',
+            '        if [ -e "$dev_single" ]; then',
+            '            ui_print "- Flashing partition ${base_name}"',
+            '            unzip -p "$ZIPFILE" "$img_file" >"$dev_single" || { ui_print "Error: Failed flashing $img_file to $dev_single"; exit 1; }',
+            '        else',
+            '            ui_print "- Flashing partition ${base_name}"',
+            '            unzip -p "$ZIPFILE" "$img_file" >"/dev/block/by-name/${base_name}" 2>/dev/null || true',
+            '        fi',
             '    fi',
             "}",
             "",
@@ -182,8 +187,13 @@ class FlashableBuilder:
             '        [ -e "$dev_b" ] && { unzip -p "$ZIPFILE" "$img_file" | $ZSTD_BIN -c -d -T0 --no-check >"$dev_b" || { ui_print "Error: Failed flashing $img_file to $dev_b"; exit 1; }; }',
             '    else',
             '        dev_single=$(find_block_device "${base_name}")',
-            '        ui_print "- Flashing partition ${base_name}"',
-            '        unzip -p "$ZIPFILE" "$img_file" | $ZSTD_BIN -c -d -T0 --no-check >"$dev_single" || { ui_print "Error: Failed flashing $img_file to $dev_single"; exit 1; }',
+            '        if [ -e "$dev_single" ]; then',
+            '            ui_print "- Flashing partition ${base_name}"',
+            '            unzip -p "$ZIPFILE" "$img_file" | $ZSTD_BIN -c -d -T0 --no-check >"$dev_single" || { ui_print "Error: Failed flashing $img_file to $dev_single"; exit 1; }',
+            '        else',
+            '            ui_print "- Flashing partition ${base_name}"',
+            '            unzip -p "$ZIPFILE" "$img_file" | $ZSTD_BIN -c -d -T0 --no-check >"/dev/block/by-name/${base_name}" 2>/dev/null || true',
+            '        fi',
             '    fi',
             "}",
             "",
@@ -287,10 +297,11 @@ class FlashableBuilder:
             '    done',
             "}",
             "",
-            'unzip -o "$ZIPFILE" META-INF/zstd -d /tmp >/dev/null 2>&1',
-            "chmod 0755 /tmp/META-INF/zstd 2>/dev/null",
-            'unzip -o "$ZIPFILE" META-INF/bin/* -d /tmp >/dev/null 2>&1',
-            "chmod 0755 /tmp/META-INF/bin/* 2>/dev/null",
+            'unzip -o "$ZIPFILE" "META-INF/*" -d /tmp >/dev/null 2>&1 || {',
+            '    unzip -o "$ZIPFILE" META-INF/zstd -d /tmp >/dev/null 2>&1',
+            '    unzip -o "$ZIPFILE" "META-INF/bin/*" -d /tmp >/dev/null 2>&1',
+            '}',
+            "chmod -R 0755 /tmp/META-INF 2>/dev/null",
             "",
             'ui_print "============================================"',
             'ui_print "         Flashing Script By Mehraan"',
@@ -538,19 +549,13 @@ class FlashableBuilder:
             if os.path.exists(zstd_src):
                 fast_stage_file(zstd_src, zstd_rec_path)
 
-        # Stage ONLY required helper binaries (lptools for super/dynamic, avbctl for vbmeta toggle)
+        # Stage helper binaries (lptools for super/dynamic, avbctl for vbmeta toggle)
         bin_dir_target = os.path.join(work_dir, "META-INF", "bin")
         bin_dir_src = os.path.join(script_dir, "bin", "device")
 
-        needed_bins = []
-        if super_specs or tr_specs:
-            needed_bins.append("lptools")
-        if vbmeta_option in ("disable", "enable"):
-            needed_bins.append("avbctl")
-
-        if needed_bins and os.path.exists(bin_dir_src):
+        if os.path.exists(bin_dir_src):
             os.makedirs(bin_dir_target, exist_ok=True)
-            for b in needed_bins:
+            for b in ["lptools", "avbctl"]:
                 b_src = os.path.join(bin_dir_src, b)
                 if os.path.exists(b_src):
                     fast_stage_file(b_src, os.path.join(bin_dir_target, b))

@@ -118,6 +118,7 @@ You can build 10GB+ flashable ROM packages entirely in the cloud **without downl
 
 1. **🍴 Fork this Repository**:
    - Click the [**Fork**](https://github.com/sheikhmehraann/Flashable-Maker/fork) button at the top-right corner of this repository to create your own personal copy.
+   - *Note for existing forks*: If you have an existing fork, click **"Sync fork"** -> **"Update branch"** at the top of your GitHub repository page to get the latest fixes.
 
 2. **⚡ Enable Workflows**:
    - In your newly forked repository, navigate to the **Actions** tab.
