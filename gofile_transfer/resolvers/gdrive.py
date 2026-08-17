@@ -69,15 +69,39 @@ class GoogleDriveResolver(BaseResolver):
                 )
 
             # Check for Google Drive "Download anyway" confirmation form
-            form_match = re.search(r'<form[^>]*action="([^"]+)"[^>]*>(.*?)</form>', html_text, re.DOTALL | re.IGNORECASE)
-            if form_match:
-                action_url = form_match.group(1)
+            soup = None
+            try:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(html_text, "html.parser")
+            except Exception:
+                pass
+
+            form_params = {}
+            action_url = None
+
+            if soup:
+                form = soup.find("form")
+                if form:
+                    action_url = form.get("action")
+                    for inp in form.find_all("input"):
+                        name = inp.get("name")
+                        val = inp.get("value")
+                        if name:
+                            form_params[name] = val or ""
+            else:
+                form_match = re.search(r'<form[^>]*action="([^"]+)"[^>]*>(.*?)</form>', html_text, re.DOTALL | re.IGNORECASE)
+                if form_match:
+                    action_url = form_match.group(1)
+                    form_content = form_match.group(2)
+                    for input_tag in re.findall(r'<input\b[^>]*>', form_content, re.IGNORECASE):
+                        name_m = re.search(r'name=["\']([^"\']+)["\']', input_tag)
+                        val_m = re.search(r'value=["\']([^"\']*)["\']', input_tag)
+                        if name_m:
+                            form_params[name_m.group(1)] = val_m.group(1) if val_m else ""
+
+            if action_url and form_params:
                 if not action_url.startswith("http"):
                     action_url = urljoin(res.url, action_url)
-
-                form_content = form_match.group(2)
-                inputs = re.findall(r'name="([^"]+)"\s+value="([^"]+)"', form_content)
-                form_params = {k: v for k, v in inputs}
                 if "id" not in form_params:
                     form_params["id"] = file_id
 
