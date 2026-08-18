@@ -119,7 +119,12 @@ class GoogleDriveResolver(BaseResolver):
                 if "text/html" in final_res.headers.get("Content-Type", ""):
                     if "Too many users" in final_res.text or "Quota exceeded" in final_res.text:
                         raise RuntimeError(
-                            "Google Drive download quota exceeded for this file (24h limit)."
+                            "\n❌ [Google Drive 24h Quota Exceeded]\n"
+                            "Google Drive has temporarily locked public downloads for this file because too many users downloaded it recently.\n\n"
+                            "💡 Quick Solutions to bypass this immediately:\n"
+                            "  1. Upload the ROM zip/archive to https://gofile.io (Unlimited speed, no quotas) and pass the GoFile link.\n"
+                            "  2. Or in Google Drive: Right-click the ROM file -> 'Make a copy' to your own Google Drive, set Link Sharing to 'Anyone with link', and use the new URL.\n"
+                            "  3. Or use MediaFire / SourceForge / direct HTTP download link."
                         )
             else:
                 # Check for confirm token in cookies or text
@@ -145,8 +150,10 @@ class GoogleDriveResolver(BaseResolver):
         final_ct = final_res.headers.get("Content-Type", "")
         if "text/html" in final_ct and "Content-Disposition" not in final_res.headers:
             raise RuntimeError(
-                "Google Drive failed to serve file stream. "
-                "The file may be quota-locked, private, or deleted."
+                "\n❌ [Google Drive Download Blocked]\n"
+                "Google Drive served an HTML error page instead of the file stream.\n"
+                "The file may be quota-locked, private, or deleted.\n"
+                "Please verify the Google Drive link or upload the ROM to https://gofile.io or MediaFire."
             )
 
         filename = None

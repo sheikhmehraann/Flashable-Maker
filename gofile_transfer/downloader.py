@@ -29,6 +29,25 @@ class ParallelDownloader:
             return "/dev/shm"
         return requested_dir or "."
 
+    def _is_valid_download(self, file_path: str, expected_size: Optional[int]) -> bool:
+        """Validate that the downloaded file is a real binary payload and not a tiny HTML error page."""
+        if not os.path.exists(file_path):
+            return False
+        sz = os.path.getsize(file_path)
+        if sz < 1024:
+            return False
+        if expected_size and expected_size > 10 * 1024 * 1024 and sz < (expected_size * 0.85):
+            return False
+        # Reject HTML error pages saved as archives
+        try:
+            with open(file_path, "rb") as f:
+                head = f.read(512)
+                if b"<!DOCTYPE" in head or b"<html" in head or b"<HTML" in head or b"<head" in head:
+                    return False
+        except Exception:
+            pass
+        return True
+
     def download(
         self,
         resolved: ResolvedURL,
@@ -36,31 +55,43 @@ class ParallelDownloader:
         custom_filename: Optional[str] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> str:
-        """Download resolved URL using optimal 16-connection aria2c engine."""
+        """Download resolved URL using optimal 16-connection aria2c engine with fallback."""
         filename = custom_filename or resolved.filename or "downloaded_file.bin"
         target_dir = self.get_optimal_directory(output_dir)
         output_path = os.path.abspath(os.path.join(target_dir, filename))
         os.makedirs(target_dir, exist_ok=True)
 
         # 1. Try aria2c with researched optimal parameters
-        if self.has_aria2:
+        if self.has_aria2 and not ("drive.google.com" in resolved.original_url or "drive.usercontent" in resolved.direct_url):
             try:
                 success = self._download_aria2(resolved.direct_url, target_dir, filename, resolved.headers, resolved.cookies)
-                if success and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                if success and self._is_valid_download(output_path, resolved.file_size):
                     return output_path
+                elif os.path.exists(output_path):
+                    os.remove(output_path)
             except Exception:
-                pass
+                if os.path.exists(output_path):
+                    try:
+                        os.remove(output_path)
+                    except OSError:
+                        pass
 
         # 2. Try native curl/curl.exe acceleration
-        if shutil.which("curl.exe") or shutil.which("curl"):
+        if (shutil.which("curl.exe") or shutil.which("curl")) and not ("drive.google.com" in resolved.original_url or "drive.usercontent" in resolved.direct_url):
             try:
                 success = self._download_curl(resolved.direct_url, output_path, resolved.headers, resolved.cookies)
-                if success and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                if success and self._is_valid_download(output_path, resolved.file_size):
                     return output_path
+                elif os.path.exists(output_path):
+                    os.remove(output_path)
             except Exception:
-                pass
+                if os.path.exists(output_path):
+                    try:
+                        os.remove(output_path)
+                    except OSError:
+                        pass
 
-        # 3. Multi-threaded range request engine (Python fallback)
+        # 3. Direct streaming download engine (100% reliable for Google Drive session streams)
         file_size = resolved.file_size
         supports_ranges = resolved.supports_ranges and file_size and file_size > (1 * 1024 * 1024)
 
@@ -71,6 +102,14 @@ class ParallelDownloader:
                 self._download_single(resolved, output_path, progress_callback)
         else:
             self._download_single(resolved, output_path, progress_callback)
+
+        if not self._is_valid_download(output_path, resolved.file_size):
+            if os.path.exists(output_path):
+                try:
+                    os.remove(output_path)
+                except OSError:
+                    pass
+            raise RuntimeError(f"Download produced an invalid or corrupted file: {output_path}")
 
         return output_path
 

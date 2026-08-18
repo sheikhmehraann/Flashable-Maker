@@ -53,6 +53,16 @@ class FastDownloader:
         if not os.path.exists(downloaded_file) or os.path.getsize(downloaded_file) < 1024:
             raise RuntimeError(f"Download failed or output file is empty: {downloaded_file}")
 
+        try:
+            with open(downloaded_file, "rb") as f:
+                head = f.read(512)
+                if b"<!DOCTYPE" in head or b"<html" in head or b"<HTML" in head or b"<head" in head:
+                    raise RuntimeError(
+                        f"Download failed: Server returned an HTML error page instead of a ROM archive ({downloaded_file})."
+                    )
+        except OSError:
+            pass
+
         file_size_mb = os.path.getsize(downloaded_file) / (1024 * 1024)
         print(f"[+] [Downloader] Download completed: {downloaded_file} ({file_size_mb:.2f} MB)")
         return downloaded_file
