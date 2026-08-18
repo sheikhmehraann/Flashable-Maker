@@ -15,6 +15,15 @@ from pathlib import Path
 from typing import Dict, Any, Tuple
 
 ZSTD_FRAME_MAGIC = b"\x28\xb5\x2f\xfd"
+SPARSE_HEADER_MAGIC = b"\x3a\xff\x26\xed"
+
+# Auto-prepend bundled host tools to system PATH
+_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_HOST_BIN = os.path.join(_ROOT_DIR, "bin", "host")
+_ROOT_BIN = os.path.join(_ROOT_DIR, "bin")
+for _p in (_HOST_BIN, _ROOT_BIN):
+    if os.path.isdir(_p) and _p not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = f"{_p}{os.pathsep}{os.environ.get('PATH', '')}"
 
 class PartitionExtractor:
     """High-speed native unpacker and partition scanner."""
@@ -33,46 +42,11 @@ class PartitionExtractor:
     @staticmethod
     def get_zstd_uncompressed_size(file_path: str) -> int:
         """
-        Retrieves the exact uncompressed partition byte size.
-        Uses python-zstandard FrameParameters, RFC 8878 header parsing, zstd CLI JSON,
-        or chunked stream counter. Never estimates with arbitrary multipliers.
+        Retrieves the exact total uncompressed partition byte size across ALL frames.
+        Supports single-frame, multi-threaded multi-frame (zstd -T0), and skippable frames.
+        Never estimates with arbitrary multipliers.
         """
-        # Method 1: python-zstandard FrameParameters (content_size)
-        try:
-            import zstandard
-            with open(file_path, "rb") as f:
-                header = f.read(1024)
-                params = zstandard.get_frame_parameters(header)
-                if params.content_size is not None and params.content_size > 0:
-                    return params.content_size
-        except Exception:
-            pass
-
-        # Method 2: RFC 8878 Manual Frame Header Parser
-        try:
-            with open(file_path, "rb") as f:
-                magic = f.read(4)
-                if magic == ZSTD_FRAME_MAGIC:
-                    fhd = f.read(1)[0]
-                    single_segment = (fhd & 0x20) != 0
-                    fcs_flag = (fhd >> 6) & 0x03
-                    has_dict = (fhd & 0x03) != 0
-                    dict_bytes = {1: 1, 2: 2, 3: 4}.get(fhd & 0x03, 0) if has_dict else 0
-                    window_bytes = 0 if single_segment else 1
-                    f.seek(5 + window_bytes + dict_bytes)
-
-                    if fcs_flag == 0 and single_segment:
-                        return f.read(1)[0]
-                    elif fcs_flag == 1:
-                        return struct.unpack("<H", f.read(2))[0] + 256
-                    elif fcs_flag == 2:
-                        return struct.unpack("<I", f.read(4))[0]
-                    elif fcs_flag == 3:
-                        return struct.unpack("<Q", f.read(8))[0]
-        except Exception:
-            pass
-
-        # Method 3: Native zstd CLI JSON query
+        # Method 1: Native zstd CLI JSON query (instant multi-frame summary)
         if shutil.which("zstd") or shutil.which("zstd.exe"):
             z_bin = "zstd.exe" if shutil.which("zstd.exe") else "zstd"
             try:
@@ -84,9 +58,16 @@ class PartitionExtractor:
                     if decomp_sz and int(decomp_sz) > 0:
                         return int(decomp_sz)
             except Exception:
-                pass
+                try:
+                    res = subprocess.run([z_bin, "-l", "-q", file_path], capture_output=True, text=True, check=True)
+                    for line in res.stdout.strip().splitlines():
+                        parts = line.strip().split()
+                        if len(parts) >= 4 and parts[3].isdigit():
+                            return int(parts[3])
+                except Exception:
+                    pass
 
-        # Method 4: Streaming decompress byte counter fallback (zero RAM overhead, 100% exact)
+        # Method 2: Multi-frame streaming byte counter (infallible 100% exact across all multi-frame & skippable zstd files)
         try:
             import zstandard
             dctx = zstandard.ZstdDecompressor()
@@ -94,12 +75,23 @@ class PartitionExtractor:
             with open(file_path, "rb") as f:
                 with dctx.stream_reader(f) as reader:
                     while True:
-                        chunk = reader.read(2 * 1024 * 1024)
+                        chunk = reader.read(4 * 1024 * 1024)
                         if not chunk:
                             break
                         total += len(chunk)
             if total > 0:
                 return total
+        except Exception:
+            pass
+
+        # Method 3: Python zstandard FrameParameters (Single Frame fallback)
+        try:
+            import zstandard
+            with open(file_path, "rb") as f:
+                header = f.read(1024)
+                params = zstandard.get_frame_parameters(header)
+                if params.content_size is not None and params.content_size > 0:
+                    return params.content_size
         except Exception:
             pass
 
@@ -123,8 +115,17 @@ class PartitionExtractor:
         os.makedirs(output_dir, exist_ok=True)
         target_super = super_path
 
-        # Unsparse if simg2img is available
-        if shutil.which("simg2img"):
+        # Check if file is a sparse image
+        is_sparse = False
+        if os.path.isfile(super_path) and os.path.getsize(super_path) >= 4:
+            try:
+                with open(super_path, "rb") as sf:
+                    is_sparse = sf.read(4) == SPARSE_HEADER_MAGIC
+            except OSError:
+                pass
+
+        # Unsparse only if sparse header is detected and simg2img is available
+        if is_sparse and shutil.which("simg2img"):
             unsparse_file = os.path.join(output_dir, "super.raw.img")
             res = subprocess.run(["simg2img", super_path, unsparse_file], capture_output=True)
             if res.returncode == 0:

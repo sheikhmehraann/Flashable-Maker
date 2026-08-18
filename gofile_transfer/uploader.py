@@ -52,15 +52,26 @@ class GoFileUploader:
             self.session.headers["Authorization"] = f"Bearer {self.token}"
 
     def get_server_list(self) -> List[str]:
-        """Fetch all available upload servers from GoFile API."""
+        """Fetch all available online upload servers from GoFile API."""
         try:
             res = self.session.get(self.API_SERVERS_URL, timeout=6)
             res.raise_for_status()
             data = res.json()
-            if data.get("status") == "ok" and "servers" in data.get("data", {}):
-                servers = [s["name"] for s in data["data"]["servers"] if "name" in s]
-                if servers:
-                    return servers
+            if data.get("status") == "ok":
+                server_data = data.get("data", {})
+                servers = server_data.get("servers", [])
+                if isinstance(servers, list) and servers:
+                    online = [
+                        s.get("name") for s in servers
+                        if isinstance(s, dict) and s.get("status") == "online" and s.get("name")
+                    ]
+                    if online:
+                        return online
+                    all_names = [s.get("name") for s in servers if isinstance(s, dict) and s.get("name")]
+                    if all_names:
+                        return all_names
+                if isinstance(server_data.get("server"), str):
+                    return [server_data["server"]]
         except Exception:
             pass
         return ["store1", "store2", "store3", "store-na-phx-1", "store-eu-par-1"]
@@ -108,19 +119,21 @@ class GoFileUploader:
 
         cmd = [
             curl_bin,
-            "-s",
+            "-sSL",
             "-k",
+            "--tcp-nodelay",
+            "-H", "Expect:",
             "-X", "POST",
             "-F", f"file=@{file_path}"
         ]
         if folder_id:
             cmd.extend(["-F", f"folderId={folder_id}"])
         if self.token:
-            cmd.extend(["-H", f"Authorization: Bearer {self.token}"])
+            cmd.extend(["-F", f"token={self.token}", "-H", f"Authorization: Bearer {self.token}"])
 
         cmd.append(upload_url)
 
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
         if res.returncode == 0 and res.stdout:
             try:
                 data = json.loads(res.stdout)

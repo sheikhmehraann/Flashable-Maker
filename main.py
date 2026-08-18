@@ -18,6 +18,14 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
+# Auto-prepend bundled host tools to system PATH
+_ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+_HOST_BIN = os.path.join(_ROOT_DIR, "bin", "host")
+_ROOT_BIN = os.path.join(_ROOT_DIR, "bin")
+for _p in (_HOST_BIN, _ROOT_BIN):
+    if os.path.isdir(_p) and _p not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = f"{_p}{os.pathsep}{os.environ.get('PATH', '')}"
+
 from core.downloader import FastDownloader
 from core.extractor import PartitionExtractor
 from core.builder import FlashableBuilder
@@ -137,6 +145,13 @@ def main():
         extracted_dir = work_space / "extracted"
         PartitionExtractor.extract_recursive(str(downloaded), str(extracted_dir))
         imgs_dir = str(extracted_dir)
+        # Reclaim 5-10 GB disk space immediately on cloud runner
+        if os.path.exists(downloaded):
+            try:
+                os.remove(downloaded)
+                print(f"[+] [Disk Cleanup] Reclaimed storage by removing source archive: {downloaded}")
+            except OSError:
+                pass
     elif args.file:
         local_path = Path(args.file).resolve()
         if not local_path.exists():
@@ -191,7 +206,8 @@ def main():
     # Step 5: Upload to Gofile (if requested)
     if args.upload == "gofile":
         print("[*] Initiating high-speed streaming upload to Gofile.io...")
-        uploader = GoFileUploader()
+        token = os.environ.get("GOFILE_TOKEN")
+        uploader = GoFileUploader(token=token)
         result = uploader.upload(final_zip)
         if result and result.download_page:
             print("\n" + "═" * 65)

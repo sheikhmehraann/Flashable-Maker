@@ -18,13 +18,17 @@ from .extractor import PartitionExtractor
 
 SUPER_PARTITIONS = {
     "system", "vendor", "product", "system_dlkm", "system_ext",
-    "vendor_dlkm", "odm_dlkm", "odm", "mi_ext"
+    "vendor_dlkm", "odm_dlkm", "odm", "mi_ext", "cust",
+    "prism", "optics", "my_product", "my_stock", "my_heytap",
+    "my_carrier", "my_region", "my_manifest", "my_preload",
+    "my_company", "my_engineering", "my_bigball"
 }
 SUPER_TR_PARTITIONS = {
     "tr_carrier", "tr_company", "tr_mi", "tr_overlayfs",
     "tr_preload", "tr_product", "tr_region", "tr_theme",
-    "tr_manifest", "tr_misc"
+    "tr_manifest", "tr_misc", "tr_vintf", "tr_vendor"
 }
+ALL_KNOWN_DYNAMIC_PARTITIONS = sorted(list(SUPER_PARTITIONS | SUPER_TR_PARTITIONS))
 SYSTEMS = {
     "boot", "dtbo", "init_boot", "vendor_boot",
     "vbmeta", "vbmeta_system", "vbmeta_vendor", "recovery"
@@ -113,7 +117,7 @@ class FlashableBuilder:
             "",
             "find_block_device() {",
             '    name="$1"',
-            '    for base in /dev/block/by-name /dev/block/bootdevice/by-name /dev/block/platform/*/by-name; do',
+            '    for base in /dev/block/by-name /dev/block/bootdevice/by-name /dev/block/platform/*/by-name /dev/block/platform/*/*/by-name; do',
             '        if [ -e "$base/$name" ]; then',
             '            echo "$base/$name"',
             '            return 0',
@@ -124,11 +128,14 @@ class FlashableBuilder:
             "",
             "find_mapper_device() {",
             '    name="$1"',
-            '    for base in /dev/block/mapper /dev/mapper; do',
-            '        if [ -e "$base/$name" ]; then',
-            '            echo "$base/$name"',
-            '            return 0',
-            '        fi',
+            '    for i in 1 2 3 4 5; do',
+            '        for base in /dev/block/mapper /dev/mapper; do',
+            '            if [ -b "$base/$name" ] || [ -e "$base/$name" ]; then',
+            '                echo "$base/$name"',
+            '                return 0',
+            '            fi',
+            '        done',
+            '        sleep 0.1',
             '    done',
             '    echo "/dev/block/mapper/$name"',
             "}",
@@ -238,7 +245,8 @@ class FlashableBuilder:
             "unmountPartitions() {",
             '    umount -f -l /system /system_root /vendor /product /system_ext /vendor_dlkm /odm_dlkm /odm \\',
             '                 /tr_carrier /tr_company /tr_mi /tr_preload /tr_product /tr_region /tr_theme \\',
-            '                 /tr_manifest /tr_misc /mnt/* 2>/dev/null || true',
+            '                 /tr_manifest /tr_misc /my_product /my_stock /my_heytap /my_carrier /my_region \\',
+            '                 /my_manifest /my_preload /my_company /my_engineering /my_bigball /cust /prism /optics /mnt/* 2>/dev/null || true',
             "}",
             "",
             "manage_logical_partition() {",
@@ -255,7 +263,7 @@ class FlashableBuilder:
             '            $LPTOOLS create "$partition$slot" "$size" || checkExit "Failed to create logical partition $partition$slot (size: $size bytes)"',
             '            ;;',
             '        create_optional)',
-            '            $LPTOOLS create "$partition$slot" "$size" 2>/dev/null || true',
+            '            [ -n "$slot" ] && { $LPTOOLS create "$partition$slot" "$size" 2>/dev/null || true; }',
             '            ;;',
             '        map)',
             '            $LPTOOLS map "$partition$slot" || checkExit "Failed to map logical partition $partition$slot"',
@@ -275,7 +283,9 @@ class FlashableBuilder:
             '        partition="${spec%%:*}"',
             '        size="${spec#*:}"',
             '        manage_logical_partition "create" "$partition" "$size" "$target_slot"',
-            '        manage_logical_partition "create_optional" "$partition" "0" "$other_slot"',
+            '        if [ -n "$other_slot" ]; then',
+            '            manage_logical_partition "create_optional" "$partition" "0" "$other_slot"',
+            '        fi',
             '    done',
             "}",
             "",
@@ -283,8 +293,12 @@ class FlashableBuilder:
             '    operation="$1"',
             '    shift',
             '    for partition in "$@"; do',
-            '        manage_logical_partition "$operation" "$partition" "" "_a"',
-            '        manage_logical_partition "$operation" "$partition" "" "_b"',
+            '        if [ "$IS_AB" -eq 1 ]; then',
+            '            manage_logical_partition "$operation" "$partition" "" "_a"',
+            '            manage_logical_partition "$operation" "$partition" "" "_b"',
+            '        else',
+            '            manage_logical_partition "$operation" "$partition" "" ""',
+            '        fi',
             '    done',
             "}",
             "",
@@ -297,11 +311,11 @@ class FlashableBuilder:
             '    done',
             "}",
             "",
-            'unzip -o "$ZIPFILE" "META-INF/*" -d /tmp >/dev/null 2>&1 || {',
-            '    unzip -o "$ZIPFILE" META-INF/zstd -d /tmp >/dev/null 2>&1',
-            '    unzip -o "$ZIPFILE" "META-INF/bin/*" -d /tmp >/dev/null 2>&1',
-            '}',
-            "chmod -R 0755 /tmp/META-INF 2>/dev/null",
+            "# Extract recovery binaries explicitly without wildcard globs (Busybox/Toybox safe)",
+            'unzip -o "$ZIPFILE" META-INF/zstd -d /tmp >/dev/null 2>&1 || true',
+            'unzip -o "$ZIPFILE" META-INF/bin/lptools -d /tmp >/dev/null 2>&1 || true',
+            'unzip -o "$ZIPFILE" META-INF/bin/avbctl -d /tmp >/dev/null 2>&1 || true',
+            "chmod 0755 /tmp/META-INF/zstd /tmp/META-INF/bin/lptools /tmp/META-INF/bin/avbctl 2>/dev/null || true",
             "",
             'ui_print "============================================"',
             'ui_print "         Flashing Script By Mehraan"',
@@ -317,11 +331,17 @@ class FlashableBuilder:
             "unmountPartitions",
             "",
             'SLOT=$(getprop ro.boot.slot_suffix)',
+            'IS_AB=1',
             'OTHER_SLOT="_a"',
             '[ "$SLOT" = "_a" ] && OTHER_SLOT="_b"',
             'slot_display="A"',
             '[ "$SLOT" = "_b" ] && slot_display="B"',
-            '[ -z "$SLOT" ] && { slot_display="A-Only"; SLOT=""; OTHER_SLOT=""; }',
+            'if [ -z "$SLOT" ]; then',
+            '    IS_AB=0',
+            '    slot_display="A-Only"',
+            '    SLOT=""',
+            '    OTHER_SLOT=""',
+            'fi',
             'ui_print "- Active Boot Slot : Slot ${slot_display}"',
             "$LPTOOLS clear-cow 2>/dev/null || lptools clear-cow 2>/dev/null || true",
             ""
@@ -386,7 +406,7 @@ class FlashableBuilder:
             sb.append('ui_print " "')
             sb.append('ui_print "Patching super partitions"')
             
-            # Step 1: Clear existing logical partitions across both slots
+            # Step 1: Pre-clear all present dynamic partitions
             clear_parts = " ".join(f'"{p[0]}"' for p in all_dyn_specs)
             sb.append(f'process_partitions_for_slots "clear" {clear_parts}')
             sb.append("")
@@ -409,7 +429,8 @@ class FlashableBuilder:
                     sb.append(f'flash_partition "{part}.img" "$(find_mapper_device {part}$SLOT)"')
 
             sb.append("")
-            # Step 5: Final target-slot unmapping and mapping to sync kernel device-mapper tables for clean recovery mounting
+            # Step 5: Flush dirty page cache and reload kernel mapper tables
+            sb.append("sync")
             sb.append(f'process_partitions_for_slot "unmap_map" "$SLOT" {map_parts}')
 
         sb.extend([

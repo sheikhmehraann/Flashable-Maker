@@ -3,9 +3,9 @@
 import re
 import os
 import requests
-import gdown
+import urllib.parse
 from urllib.parse import parse_qs, urlparse, urljoin
-from typing import Optional
+from typing import Optional, Tuple
 from .base import BaseResolver, ResolvedURL
 
 
@@ -18,25 +18,31 @@ class GoogleDriveResolver(BaseResolver):
         parsed = urlparse(url)
         return any(domain in parsed.netloc for domain in self.GDRIVE_DOMAINS)
 
-    def extract_file_id(self, url: str) -> Optional[str]:
-        """Extract Google Drive file ID from various URL patterns."""
-        match = re.search(r"/file/d/([a-zA-Z0-9_-]+)", url)
-        if match:
-            return match.group(1)
-
+    def extract_file_id_and_resourcekey(self, url: str) -> Tuple[Optional[str], Optional[str]]:
+        """Extract Google Drive file ID and optional resourcekey from various URL patterns."""
         parsed = urlparse(url)
         params = parse_qs(parsed.query)
+        resourcekey = params.get("resourcekey", [None])[0]
+
+        match = re.search(r"/file/d/([a-zA-Z0-9_-]+)", url)
+        if match:
+            return match.group(1), resourcekey
+
         if "id" in params and params["id"]:
-            return params["id"][0]
+            return params["id"][0], resourcekey
 
         match = re.search(r"/d/([a-zA-Z0-9_-]+)", url)
         if match:
-            return match.group(1)
+            return match.group(1), resourcekey
 
-        return None
+        return None, resourcekey
+
+    def extract_file_id(self, url: str) -> Optional[str]:
+        file_id, _ = self.extract_file_id_and_resourcekey(url)
+        return file_id
 
     def resolve(self, url: str) -> ResolvedURL:
-        file_id = self.extract_file_id(url)
+        file_id, resourcekey = self.extract_file_id_and_resourcekey(url)
         if not file_id:
             raise ValueError(f"Could not extract Google Drive file ID from URL: {url}")
 
@@ -46,6 +52,8 @@ class GoogleDriveResolver(BaseResolver):
         })
 
         initial_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+        if resourcekey:
+            initial_url += f"&resourcekey={resourcekey}"
         res = session.get(initial_url, stream=True)
 
         final_res = res
@@ -146,7 +154,7 @@ class GoogleDriveResolver(BaseResolver):
         if cd:
             fn_match = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';]+)["\']?', cd, re.IGNORECASE)
             if fn_match:
-                filename = fn_match.group(1)
+                filename = urllib.parse.unquote(fn_match.group(1).strip("\"'"))
 
         if not filename:
             filename = f"gdrive_{file_id}.bin"

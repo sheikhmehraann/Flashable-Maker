@@ -56,6 +56,12 @@ jobs:
       - name: Checkout Flashable-Engine
         uses: actions/checkout@v4
 
+      - name: Maximize Runner Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache 2>/dev/null || true
+          sudo docker image prune --all --force 2>/dev/null || true
+          df -h /
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -72,38 +78,64 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Set Tool Permissions
+      - name: Set Tool Permissions & PATH
         run: |
           chmod -R +x bin/host/ || true
           chmod -R +x bin/device/ || true
           chmod +x bin/zstd-arm64 || true
+          echo "$GITHUB_WORKSPACE/bin/host" >> $GITHUB_PATH
+          echo "$GITHUB_WORKSPACE/bin" >> $GITHUB_PATH
 
       - name: Run Build Pipeline & Upload to Gofile
         id: build_step
+        env:
+          ROM_URL: ${{ github.event.inputs.rom_url }}
+          DEV_NAME: ${{ github.event.inputs.device_name }}
+          CODENAME: ${{ github.event.inputs.device_codename }}
+          ROM_VER: ${{ github.event.inputs.rom_version }}
+          MAINTAINER: ${{ github.event.inputs.maintainer }}
+          VBMETA: ${{ github.event.inputs.vbmeta_option }}
+          ZSTD_LVL: ${{ github.event.inputs.zstd_level }}
+          ZIP_LVL: ${{ github.event.inputs.zip_level }}
+          GOFILE_TOKEN: ${{ secrets.GOFILE_TOKEN }}
         run: |
           python main.py \
-            --url "${{ github.event.inputs.rom_url }}" \
-            --device "${{ github.event.inputs.device_name }}" \
-            --codename "${{ github.event.inputs.device_codename }}" \
-            --version "${{ github.event.inputs.rom_version }}" \
-            --maintainer "${{ github.event.inputs.maintainer }}" \
-            --vbmeta "${{ github.event.inputs.vbmeta_option }}" \
-            --zstd-level "${{ github.event.inputs.zstd_level }}" \
-            --zip-level "${{ github.event.inputs.zip_level }}" \
+            --url "$ROM_URL" \
+            --device "$DEV_NAME" \
+            --codename "$CODENAME" \
+            --version "$ROM_VER" \
+            --maintainer "$MAINTAINER" \
+            --vbmeta "$VBMETA" \
+            --zstd-level "$ZSTD_LVL" \
+            --zip-level "$ZIP_LVL" \
             --upload "gofile" \
             --output "./output"
 
       - name: Post Job Summary
         if: always()
+        env:
+          DEV_NAME: ${{ github.event.inputs.device_name }}
+          CODENAME: ${{ github.event.inputs.device_codename }}
+          ROM_VER: ${{ github.event.inputs.rom_version }}
+          MAINTAINER: ${{ github.event.inputs.maintainer }}
+          VBMETA: ${{ github.event.inputs.vbmeta_option }}
+          DL_PAGE: ${{ steps.build_step.outputs.download_page }}
+          ZIP_NAME: ${{ steps.build_step.outputs.zip_name }}
+          BUILD_OUTCOME: ${{ steps.build_step.outcome }}
         run: |
-          echo "## ⚡ Flashable ROM Package Ready" >> $GITHUB_STEP_SUMMARY
-          echo "- **Device**: ${{ github.event.inputs.device_name }} (\`${{ github.event.inputs.device_codename }}\`)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version**: \`${{ github.event.inputs.rom_version }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Maintainer**: ${{ github.event.inputs.maintainer }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **AVB Vbmeta Mode**: \`${{ github.event.inputs.vbmeta_option }}\`" >> $GITHUB_STEP_SUMMARY
-          if [ -n "${{ steps.build_step.outputs.download_page }}" ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 🚀 [Download Flashable ZIP from GoFile](${{ steps.build_step.outputs.download_page }})" >> $GITHUB_STEP_SUMMARY
-            echo "**File Name**: \`${{ steps.build_step.outputs.zip_name }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "**GoFile Link**: [${{ steps.build_step.outputs.download_page }}](${{ steps.build_step.outputs.download_page }})" >> $GITHUB_STEP_SUMMARY
+          if [ "$BUILD_OUTCOME" = "success" ]; then
+            echo "## ⚡ Flashable ROM Package Ready" >> $GITHUB_STEP_SUMMARY
+            echo "- **Device**: $DEV_NAME (\`$CODENAME\`)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Version**: \`$ROM_VER\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Maintainer**: $MAINTAINER" >> $GITHUB_STEP_SUMMARY
+            echo "- **AVB Vbmeta Mode**: \`$VBMETA\`" >> $GITHUB_STEP_SUMMARY
+            if [ -n "$DL_PAGE" ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "### 🚀 [Download Flashable ZIP from GoFile]($DL_PAGE)" >> $GITHUB_STEP_SUMMARY
+              echo "**File Name**: \`$ZIP_NAME\`" >> $GITHUB_STEP_SUMMARY
+              echo "**GoFile Link**: [$DL_PAGE]($DL_PAGE)" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "## ❌ Flashable ROM Build Failed" >> $GITHUB_STEP_SUMMARY
+            echo "Please inspect the build logs above for details." >> $GITHUB_STEP_SUMMARY
           fi

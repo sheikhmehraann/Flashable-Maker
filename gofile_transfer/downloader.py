@@ -43,9 +43,9 @@ class ParallelDownloader:
         os.makedirs(target_dir, exist_ok=True)
 
         # 1. Try aria2c with researched optimal parameters
-        if self.has_aria2 and not resolved.cookies:
+        if self.has_aria2:
             try:
-                success = self._download_aria2(resolved.direct_url, target_dir, filename)
+                success = self._download_aria2(resolved.direct_url, target_dir, filename, resolved.headers, resolved.cookies)
                 if success and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
                     return output_path
             except Exception:
@@ -77,17 +77,17 @@ class ParallelDownloader:
     def _download_curl(self, direct_url: str, output_path: str, headers: dict, cookies: dict) -> bool:
         """Download via native curl/curl.exe."""
         curl_bin = "curl.exe" if shutil.which("curl.exe") else "curl"
-        cmd = [curl_bin, "-L", "-s", "-k", "-o", output_path]
+        cmd = [curl_bin, "-L", "-sSL", "-k", "-o", output_path]
         for k, v in headers.items():
             cmd.extend(["-H", f"{k}: {v}"])
         if cookies:
             cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
             cmd.extend(["-H", f"Cookie: {cookie_str}"])
         cmd.append(direct_url)
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
         return res.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
 
-    def _download_aria2(self, direct_url: str, output_dir: str, filename: str) -> bool:
+    def _download_aria2(self, direct_url: str, output_dir: str, filename: str, headers: Optional[dict] = None, cookies: Optional[dict] = None) -> bool:
         """Download via native aria2c with researched optimal production flags."""
         alloc_mode = "falloc" if sys.platform.startswith("linux") else "none"
         cmd = [
@@ -99,7 +99,7 @@ class ParallelDownloader:
             f"--file-allocation={alloc_mode}",
             "--disk-cache=128M",
             "--enable-mmap=true",
-            '--user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"',
+            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             "--allow-overwrite=true",
             "--auto-file-renaming=false",
             "--conditional-get=true",
@@ -108,9 +108,17 @@ class ParallelDownloader:
             "--summary-interval=1",
             "--console-log-level=warn",
             "--dir", output_dir,
-            "--out", filename,
-            direct_url
+            "--out", filename
         ]
+        if headers:
+            for k, v in headers.items():
+                if k.lower() not in ("user-agent", "host", "content-length"):
+                    cmd.append(f"--header={k}: {v}")
+        if cookies:
+            cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
+            cmd.append(f"--header=Cookie: {cookie_str}")
+
+        cmd.append(direct_url)
         res = subprocess.run(cmd, capture_output=True, text=True)
         return res.returncode == 0
 
@@ -164,6 +172,8 @@ class ParallelDownloader:
                         with httpx.Client(follow_redirects=True, timeout=60.0, cookies=resolved.cookies) as client:
                             with client.stream("GET", resolved.direct_url, headers=range_headers) as response:
                                 response.raise_for_status()
+                                if response.status_code != 206 and workers > 1:
+                                    raise RuntimeError(f"Server returned HTTP {response.status_code} instead of 206 Partial Content")
                                 current_pos = start
                                 with open(output_path, "rb+") as f:
                                     f.seek(start)
