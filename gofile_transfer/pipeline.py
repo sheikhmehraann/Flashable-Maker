@@ -6,9 +6,23 @@ import time
 import tempfile
 from dataclasses import dataclass
 from typing import Optional, List
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
+
+try:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    HAS_RICH = True
+    console = Console(force_terminal=True, legacy_windows=False)
+except ImportError:
+    HAS_RICH = False
+    class DummyConsole:
+        def print(self, *args, **kwargs):
+            import re
+            msg = " ".join(str(a) for a in args)
+            clean_msg = re.sub(r'\[/?[a-zA-Z0-9 _=#]+\]', '', msg)
+            print(clean_msg)
+
+    console = DummyConsole()
 
 from .resolvers import ResolverFactory, ResolvedURL
 from .downloader import ParallelDownloader
@@ -20,8 +34,6 @@ if sys.platform == "win32":
         sys.stderr.reconfigure(encoding="utf-8")
     except Exception:
         pass
-
-console = Console(force_terminal=True, legacy_windows=False)
 
 
 @dataclass
@@ -106,13 +118,24 @@ class TransferPipeline:
                     pass
 
     def print_summary_panel(self, summary: TransferSummary):
-        """Render a clean rich terminal summary panel."""
-        table = Table(show_header=False, box=None)
-        table.add_row("[bold cyan]GoFile Link:[/bold cyan]", f"[bold green u]{summary.gofile_url}[/bold green u]")
-        table.add_row("[bold white]File Name:[/bold white]", summary.filename)
-        table.add_row("[bold white]File Size:[/bold white]", f"{summary.file_size / (1024 * 1024):.2f} MB")
-        table.add_row("[bold white]Download Speed (64x):[/bold white]", f"{summary.download_speed_mbps:.2f} MB/s ({summary.download_time:.2f}s)")
-        table.add_row("[bold white]Upload Speed (C-Level):[/bold white]", f"{summary.upload_speed_mbps:.2f} MB/s ({summary.upload_time:.2f}s)")
-        table.add_row("[bold white]Total Duration:[/bold white]", f"{summary.total_time:.2f}s")
+        """Render a clean terminal summary panel."""
+        if HAS_RICH:
+            table = Table(show_header=False, box=None)
+            table.add_row("[bold cyan]GoFile Link:[/bold cyan]", f"[bold green u]{summary.gofile_url}[/bold green u]")
+            table.add_row("[bold white]File Name:[/bold white]", summary.filename)
+            table.add_row("[bold white]File Size:[/bold white]", f"{summary.file_size / (1024 * 1024):.2f} MB")
+            table.add_row("[bold white]Download Speed (64x):[/bold white]", f"{summary.download_speed_mbps:.2f} MB/s ({summary.download_time:.2f}s)")
+            table.add_row("[bold white]Upload Speed (C-Level):[/bold white]", f"{summary.upload_speed_mbps:.2f} MB/s ({summary.upload_time:.2f}s)")
+            table.add_row("[bold white]Total Duration:[/bold white]", f"{summary.total_time:.2f}s")
 
-        console.print(Panel(table, title="[+] ⚡ 64-Stream Turbo Transfer Completed", border_style="bold green"))
+            console.print(Panel(table, title="[+] ⚡ 64-Stream Turbo Transfer Completed", border_style="bold green"))
+        else:
+            print("\n" + "=" * 65)
+            print("         ⚡ 64-Stream Turbo Transfer Completed")
+            print(f"  GoFile Link           : {summary.gofile_url}")
+            print(f"  File Name             : {summary.filename}")
+            print(f"  File Size             : {summary.file_size / (1024 * 1024):.2f} MB")
+            print(f"  Download Speed (64x)  : {summary.download_speed_mbps:.2f} MB/s ({summary.download_time:.2f}s)")
+            print(f"  Upload Speed (C-Level): {summary.upload_speed_mbps:.2f} MB/s ({summary.upload_time:.2f}s)")
+            print(f"  Total Duration        : {summary.total_time:.2f}s")
+            print("=" * 65 + "\n")

@@ -8,7 +8,13 @@ import subprocess
 import httpx
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Callable, List
-from rich.progress import Progress, TextColumn, BarColumn, DownloadColumn, TransferSpeedColumn, TimeRemainingColumn
+
+try:
+    from rich.progress import Progress, TextColumn, BarColumn, DownloadColumn, TransferSpeedColumn, TimeRemainingColumn
+    HAS_RICH = True
+except ImportError:
+    HAS_RICH = False
+
 from .resolvers import ResolvedURL
 
 
@@ -192,15 +198,51 @@ class ParallelDownloader:
 
         downloaded_bytes = 0
 
-        with Progress(
-            TextColumn("[bold cyan]{task.description}"),
-            BarColumn(complete_style="bold green", finished_style="bold green"),
-            DownloadColumn(),
-            TransferSpeedColumn(),
-            TimeRemainingColumn(),
-        ) as progress:
-            task = progress.add_task(f"⚡ Parallel Download {os.path.basename(output_path)}", total=file_size)
+        if HAS_RICH:
+            with Progress(
+                TextColumn("[bold cyan]{task.description}"),
+                BarColumn(complete_style="bold green", finished_style="bold green"),
+                DownloadColumn(),
+                TransferSpeedColumn(),
+                TimeRemainingColumn(),
+            ) as progress:
+                task = progress.add_task(f"⚡ Parallel Download {os.path.basename(output_path)}", total=file_size)
 
+                def _download_chunk(start: int, end: int, part_id: int):
+                    nonlocal downloaded_bytes
+                    range_headers = resolved.headers.copy()
+                    range_headers["Range"] = f"bytes={start}-{end}"
+
+                    for attempt in range(self.max_retries):
+                        try:
+                            with httpx.Client(follow_redirects=True, timeout=60.0, cookies=resolved.cookies) as client:
+                                with client.stream("GET", resolved.direct_url, headers=range_headers) as response:
+                                    response.raise_for_status()
+                                    if response.status_code != 206 and workers > 1:
+                                        raise RuntimeError(f"Server returned HTTP {response.status_code} instead of 206 Partial Content")
+                                    current_pos = start
+                                    with open(output_path, "rb+") as f:
+                                        f.seek(start)
+                                        for chunk in response.iter_bytes(chunk_size=self.chunk_size):
+                                            if chunk:
+                                                f.write(chunk)
+                                                chunk_len = len(chunk)
+                                                current_pos += chunk_len
+                                                downloaded_bytes += chunk_len
+                                                progress.update(task, completed=downloaded_bytes)
+                                                if progress_callback:
+                                                    progress_callback(downloaded_bytes, file_size)
+                            return
+                        except Exception as e:
+                            if attempt == self.max_retries - 1:
+                                raise RuntimeError(f"Chunk {part_id} failed after {self.max_retries} retries: {e}")
+                            time.sleep(0.3)
+
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = [executor.submit(_download_chunk, start, end, part_id) for start, end, part_id in ranges]
+                    for future in as_completed(futures):
+                        future.result()
+        else:
             def _download_chunk(start: int, end: int, part_id: int):
                 nonlocal downloaded_bytes
                 range_headers = resolved.headers.copy()
@@ -222,7 +264,6 @@ class ParallelDownloader:
                                             chunk_len = len(chunk)
                                             current_pos += chunk_len
                                             downloaded_bytes += chunk_len
-                                            progress.update(task, completed=downloaded_bytes)
                                             if progress_callback:
                                                 progress_callback(downloaded_bytes, file_size)
                         return

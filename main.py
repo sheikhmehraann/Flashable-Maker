@@ -206,19 +206,23 @@ def main():
     # Step 5: Upload to Gofile (if requested)
     if args.upload == "gofile":
         print("[*] Initiating high-speed streaming upload to Gofile.io...")
-        token = os.environ.get("GOFILE_TOKEN")
-        uploader = GoFileUploader(token=token)
-        result = uploader.upload(final_zip)
-        if result and result.download_page:
-            print("\n" + "═" * 65)
-            print("                 GOFILE CLOUD UPLOAD COMPLETE!")
-            print(f"  Download Page : {result.download_page}")
-            print(f"  File ID       : {result.file_id}")
-            print("═" * 65 + "\n")
-            write_github_output("download_page", result.download_page)
-            write_github_output("file_id", result.file_id)
-        else:
-            print("[!] Warning: Gofile upload finished without download URL.")
+        raw_token = os.environ.get("GOFILE_TOKEN")
+        token = raw_token.strip() if raw_token and raw_token.strip() else None
+        try:
+            uploader = GoFileUploader(token=token)
+            result = uploader.upload(final_zip)
+            if result and result.download_page:
+                print("\n" + "═" * 65)
+                print("                 GOFILE CLOUD UPLOAD COMPLETE!")
+                print(f"  Download Page : {result.download_page}")
+                print(f"  File ID       : {result.file_id}")
+                print("═" * 65 + "\n")
+                write_github_output("download_page", result.download_page)
+                write_github_output("file_id", result.file_id)
+            else:
+                print("[!] Warning: Gofile upload finished without download URL.")
+        except Exception as e:
+            print(f"[!] Error during Gofile upload: {e}")
 
 
 if __name__ == "__main__":

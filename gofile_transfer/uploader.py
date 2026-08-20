@@ -12,7 +12,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Optional, Callable, List, Dict
 from requests_toolbelt import MultipartEncoder, MultipartEncoderMonitor
-from rich.progress import Progress, TextColumn, BarColumn, DownloadColumn, TransferSpeedColumn, TimeRemainingColumn
+
+try:
+    from rich.progress import Progress, TextColumn, BarColumn, DownloadColumn, TransferSpeedColumn, TimeRemainingColumn
+    HAS_RICH = True
+except ImportError:
+    HAS_RICH = False
 
 
 @dataclass
@@ -32,7 +37,9 @@ class GoFileUploader:
     API_SERVERS_URL = "https://api.gofile.io/servers"
 
     def __init__(self, token: Optional[str] = None):
-        self.token = token
+        if isinstance(token, str):
+            token = token.strip()
+        self.token = token if token else None
         self.has_curl = shutil.which("curl.exe") is not None or shutil.which("curl") is not None
         self.session = requests.Session()
         
@@ -48,8 +55,8 @@ class GoFileUploader:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             "Connection": "keep-alive"
         })
-        if self.token:
-            self.session.headers["Authorization"] = f"Bearer {self.token}"
+        if self.token and self.token.strip():
+            self.session.headers["Authorization"] = f"Bearer {self.token.strip()}"
 
     def get_server_list(self) -> List[str]:
         """Fetch all available online upload servers from GoFile API."""
@@ -57,8 +64,8 @@ class GoFileUploader:
             res = self.session.get(self.API_SERVERS_URL, timeout=6)
             res.raise_for_status()
             data = res.json()
-            if data.get("status") == "ok":
-                server_data = data.get("data", {})
+            if isinstance(data, dict):
+                server_data = data.get("data") if isinstance(data.get("data"), dict) else data
                 servers = server_data.get("servers", [])
                 if isinstance(servers, list) and servers:
                     online = [
@@ -70,8 +77,9 @@ class GoFileUploader:
                     all_names = [s.get("name") for s in servers if isinstance(s, dict) and s.get("name")]
                     if all_names:
                         return all_names
-                if isinstance(server_data.get("server"), str):
-                    return [server_data["server"]]
+                srv = server_data.get("server")
+                if isinstance(srv, str) and srv:
+                    return [srv]
         except Exception:
             pass
         return ["store1", "store2", "store3", "store-na-phx-1", "store-eu-par-1"]
@@ -93,24 +101,37 @@ class GoFileUploader:
         custom_filename: Optional[str] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> GoFileResult:
-        """Upload a file using native libcurl turbo acceleration or Python session fallback."""
+        """Upload a file using native libcurl turbo acceleration or Python session fallback with multi-server retries."""
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        server = self.get_fastest_server()
         filename = custom_filename or os.path.basename(file_path)
+        servers = self.get_server_list()
+        if not servers:
+            servers = ["store1", "store2", "store3", "store-na-phx-1", "store-eu-par-1"]
 
-        # 1. Try native C-level curl upload (Fastest HTTP/2 16MB socket streaming)
-        if self.has_curl:
+        servers_to_try = servers[:5]
+        last_exception = None
+
+        for server in servers_to_try:
+            # 1. Try native C-level curl upload (Fastest HTTP/2 16MB socket streaming)
+            if self.has_curl:
+                try:
+                    result = self._upload_curl(file_path, server, folder_id, filename)
+                    if result:
+                        return result
+                except Exception as e:
+                    last_exception = e
+
+            # 2. Python streaming upload fallback
             try:
-                result = self._upload_curl(file_path, server, folder_id, filename)
+                result = self._upload_python(file_path, server, folder_id, filename, progress_callback)
                 if result:
                     return result
-            except Exception:
-                pass
+            except Exception as e:
+                last_exception = e
 
-        # 2. Python streaming upload fallback
-        return self._upload_python(file_path, server, folder_id, filename, progress_callback)
+        raise RuntimeError(f"Failed to upload {filename} after trying {len(servers_to_try)} servers. Last error: {last_exception}")
 
     def _upload_curl(self, file_path: str, server: str, folder_id: Optional[str], filename: str) -> Optional[GoFileResult]:
         """Upload via native libcurl C engine with 16MB socket buffer, Expect: suppression, and TCP_NODELAY."""
@@ -128,8 +149,9 @@ class GoFileUploader:
         ]
         if folder_id:
             cmd.extend(["-F", f"folderId={folder_id}"])
-        if self.token:
-            cmd.extend(["-F", f"token={self.token}", "-H", f"Authorization: Bearer {self.token}"])
+        if self.token and self.token.strip():
+            tok = self.token.strip()
+            cmd.extend(["-F", f"token={tok}", "-H", f"Authorization: Bearer {tok}"])
 
         cmd.append(upload_url)
 
@@ -167,22 +189,32 @@ class GoFileUploader:
             fields = {"file": (filename, f, "application/octet-stream")}
             if folder_id:
                 fields["folderId"] = folder_id
-            if self.token:
-                fields["token"] = self.token
+            if self.token and self.token.strip():
+                fields["token"] = self.token.strip()
 
             encoder = MultipartEncoder(fields=fields)
 
-            with Progress(
-                TextColumn("[bold yellow]{task.description}"),
-                BarColumn(complete_style="bold yellow", finished_style="bold yellow"),
-                DownloadColumn(),
-                TransferSpeedColumn(),
-                TimeRemainingColumn(),
-            ) as progress:
-                task = progress.add_task(f"🚀 Turbo Upload ({server}) {filename}", total=file_size)
+            if HAS_RICH:
+                with Progress(
+                    TextColumn("[bold yellow]{task.description}"),
+                    BarColumn(complete_style="bold yellow", finished_style="bold yellow"),
+                    DownloadColumn(),
+                    TransferSpeedColumn(),
+                    TimeRemainingColumn(),
+                ) as progress:
+                    task = progress.add_task(f"🚀 Turbo Upload ({server}) {filename}", total=file_size)
 
+                    def _monitor_callback(monitor):
+                        progress.update(task, completed=monitor.bytes_read)
+                        if progress_callback:
+                            progress_callback(monitor.bytes_read, file_size)
+
+                    monitor = MultipartEncoderMonitor(encoder, _monitor_callback)
+                    headers = {"Content-Type": monitor.content_type, "Expect": ""}
+
+                    res = self.session.post(upload_url, data=monitor, headers=headers, timeout=1800)
+            else:
                 def _monitor_callback(monitor):
-                    progress.update(task, completed=monitor.bytes_read)
                     if progress_callback:
                         progress_callback(monitor.bytes_read, file_size)
 
@@ -190,18 +222,19 @@ class GoFileUploader:
                 headers = {"Content-Type": monitor.content_type, "Expect": ""}
 
                 res = self.session.post(upload_url, data=monitor, headers=headers, timeout=1800)
-                res.raise_for_status()
-                response_data = res.json()
 
-                if response_data.get("status") != "ok":
-                    raise RuntimeError(f"GoFile upload returned status '{response_data.get('status')}': {response_data}")
+            res.raise_for_status()
+            response_data = res.json()
 
-                data = response_data["data"]
-                return GoFileResult(
-                    download_page=data.get("downloadPage", f"https://gofile.io/d/{data.get('code', '')}"),
-                    code=data.get("code", ""),
-                    file_id=data.get("fileId", ""),
-                    file_name=data.get("fileName", filename),
-                    parent_folder=data.get("parentFolder"),
-                    md5=data.get("md5")
-                )
+            if response_data.get("status") != "ok":
+                raise RuntimeError(f"GoFile upload returned status '{response_data.get('status')}': {response_data}")
+
+            data = response_data["data"]
+            return GoFileResult(
+                download_page=data.get("downloadPage", f"https://gofile.io/d/{data.get('code', '')}"),
+                code=data.get("code", ""),
+                file_id=data.get("fileId", ""),
+                file_name=data.get("fileName", filename),
+                parent_folder=data.get("parentFolder"),
+                md5=data.get("md5")
+            )

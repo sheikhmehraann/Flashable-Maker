@@ -14,6 +14,8 @@ import subprocess
 import urllib.request
 from typing import Optional, Dict, Any
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 GOFILE_SERVERS_API = "https://api.gofile.io/servers"
 DEFAULT_FALLBACK_SERVERS = ["store1", "store2", "store3"]
 
@@ -28,8 +30,8 @@ def get_optimal_server(token: Optional[str] = None) -> str:
         with urllib.request.urlopen(req, timeout=10) as resp:
             if resp.status == 200:
                 data = json.loads(resp.read().decode("utf-8"))
-                if data.get("status") == "ok":
-                    server_data = data.get("data", {})
+                if isinstance(data, dict):
+                    server_data = data.get("data") if isinstance(data.get("data"), dict) else data
                     servers = server_data.get("servers", [])
                     if isinstance(servers, list) and servers:
                         online = [
@@ -53,8 +55,9 @@ def upload_streaming_curl(filepath: str, server: str, token: Optional[str] = Non
     """Streams file directly from disk via native curl with zero RAM overhead."""
     upload_url = f"https://{server}.gofile.io/contents/uploadfile"
     cmd = ["curl", "-sSL", "-X", "POST", upload_url, "-F", f"file=@{filepath}"]
-    if token:
-        cmd.extend(["-F", f"token={token}", "-H", f"Authorization: Bearer {token}"])
+    if token and token.strip():
+        tok = token.strip()
+        cmd.extend(["-F", f"token={tok}", "-H", f"Authorization: Bearer {tok}"])
 
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:

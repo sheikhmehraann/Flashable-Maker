@@ -1,23 +1,25 @@
-import json
-from curl_cffi import requests
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-s = requests.Session(impersonate="chrome120")
+import json
+import cloudscraper
+
+scraper = cloudscraper.create_scraper()
 
 # 1. Create account
-r1 = s.post("https://api.gofile.io/accounts", json={})
+r1 = scraper.post("https://api.gofile.io/accounts", json={})
 print("Account status:", r1.status_code)
-print(r1.text)
-
 token = r1.json().get("data", {}).get("token")
 print("Token:", token)
 
-# 2. Get content
+# 2. Get folder contents
 headers = {
     "Authorization": f"Bearer {token}",
     "Origin": "https://gofile.io",
     "Referer": "https://gofile.io/",
 }
 
-r2 = s.get("https://api.gofile.io/contents/VDm7s5bu", headers=headers)
+r2 = scraper.get("https://api.gofile.io/contents/VDm7s5bu", headers=headers)
 print("Content status:", r2.status_code)
 print(json.dumps(r2.json(), indent=2))

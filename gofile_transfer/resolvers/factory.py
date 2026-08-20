@@ -5,6 +5,7 @@ from .base import BaseResolver, ResolvedURL
 from .gdrive import GoogleDriveResolver
 from .sourceforge import SourceForgeResolver
 from .mediafire import MediaFireResolver
+from .gofile import GoFileResolver
 from .direct import DirectURLResolver
 
 
@@ -16,6 +17,7 @@ class ResolverFactory:
             GoogleDriveResolver(),
             SourceForgeResolver(),
             MediaFireResolver(),
+            GoFileResolver(),
             DirectURLResolver(),  # Fallback resolver for direct links & Dropbox
         ]
 
