@@ -410,20 +410,21 @@ manage_logical_partition() {
 
     case "$operation" in
         clear)
-            lptools unmap "$partition$slot" && lptools remove "$partition$slot"
+            lptools unmap "$partition$slot" 2>/dev/null || true
+            lptools remove "$partition$slot" 2>/dev/null || true
             ;;
         create)
             lptools create "$partition$slot" "$size" || checkExit
             ;;
         create_optional)
-            lptools create "$partition$slot" "$size" || true
+            lptools create "$partition$slot" "$size" 2>/dev/null || true
             ;;
         map)
-            lptools map "$partition$slot" || checkExit
+            [ -e "/dev/block/mapper/$partition$slot" ] || [ -e "/dev/mapper/$partition$slot" ] || { lptools map "$partition$slot" 2>/dev/null || true; }
             ;;
         unmap_map)
-            lptools unmap "$partition$slot"
-            lptools map "$partition$slot" || checkExit
+            lptools unmap "$partition$slot" 2>/dev/null || true
+            lptools map "$partition$slot" 2>/dev/null || true
             ;;
     esac
 }

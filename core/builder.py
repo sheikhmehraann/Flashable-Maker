@@ -128,14 +128,18 @@ class FlashableBuilder:
             "",
             "find_mapper_device() {",
             '    name="$1"',
-            '    for i in 1 2 3 4 5; do',
-            '        for base in /dev/block/mapper /dev/mapper; do',
-            '            if [ -b "$base/$name" ] || [ -e "$base/$name" ]; then',
-            '                echo "$base/$name"',
-            '                return 0',
-            '            fi',
-            '        done',
-            '        sleep 0.1',
+            '    for base in /dev/block/mapper /dev/mapper /dev/block/by-name; do',
+            '        if [ -b "$base/$name" ] || [ -e "$base/$name" ]; then',
+            '            echo "$base/$name"',
+            '            return 0',
+            '        fi',
+            '    done',
+            '    $LPTOOLS map "$name" 2>/dev/null || true',
+            '    for base in /dev/block/mapper /dev/mapper /dev/block/by-name; do',
+            '        if [ -b "$base/$name" ] || [ -e "$base/$name" ]; then',
+            '            echo "$base/$name"',
+            '            return 0',
+            '        fi',
             '    done',
             '    echo "/dev/block/mapper/$name"',
             "}",
@@ -266,11 +270,11 @@ class FlashableBuilder:
             '            [ -n "$slot" ] && { $LPTOOLS create "$partition$slot" "$size" 2>/dev/null || true; }',
             '            ;;',
             '        map)',
-            '            $LPTOOLS map "$partition$slot" || checkExit "Failed to map logical partition $partition$slot"',
+            '            [ -e "/dev/block/mapper/$partition$slot" ] || [ -e "/dev/mapper/$partition$slot" ] || { $LPTOOLS map "$partition$slot" 2>/dev/null || true; }',
             '            ;;',
             '        unmap_map)',
             '            $LPTOOLS unmap "$partition$slot" 2>/dev/null || true',
-            '            $LPTOOLS map "$partition$slot" || checkExit "Failed to remap logical partition $partition$slot"',
+            '            $LPTOOLS map "$partition$slot" 2>/dev/null || true',
             '            ;;',
             '    esac',
             "}",
@@ -416,12 +420,7 @@ class FlashableBuilder:
             sb.append(f'create_partitions_for_slot "$SLOT" "$OTHER_SLOT" {create_specs}')
             sb.append("")
 
-            # Step 3: Map logical partitions on active slot
-            map_parts = " ".join(f'"{p[0]}"' for p in all_dyn_specs)
-            sb.append(f'process_partitions_for_slot "map" "$SLOT" {map_parts}')
-            sb.append("")
-
-            # Step 4: Stream flash decompressed images directly to mapper block devices
+            # Step 3: Stream flash decompressed images directly to mapper block devices
             for part, _ in all_dyn_specs:
                 if use_zstd:
                     sb.append(f'flash_partition_zstd "{part}.img.zst" "$(find_mapper_device {part}$SLOT)"')
@@ -429,8 +428,9 @@ class FlashableBuilder:
                     sb.append(f'flash_partition "{part}.img" "$(find_mapper_device {part}$SLOT)"')
 
             sb.append("")
-            # Step 5: Flush dirty page cache and reload kernel mapper tables
+            # Step 4: Flush dirty page cache and reload kernel mapper tables
             sb.append("sync")
+            map_parts = " ".join(f'"{p[0]}"' for p in all_dyn_specs)
             sb.append(f'process_partitions_for_slot "unmap_map" "$SLOT" {map_parts}')
 
         sb.extend([
