@@ -11,7 +11,11 @@ from urllib3.util import Retry
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Optional, Callable, List, Dict
-from requests_toolbelt import MultipartEncoder, MultipartEncoderMonitor
+try:
+    from requests_toolbelt import MultipartEncoder, MultipartEncoderMonitor
+    HAS_TOOLBELT = True
+except ImportError:
+    HAS_TOOLBELT = False
 
 try:
     from rich.progress import Progress, TextColumn, BarColumn, DownloadColumn, TransferSpeedColumn, TimeRemainingColumn
@@ -185,27 +189,37 @@ class GoFileUploader:
         file_size = os.path.getsize(file_path)
         upload_url = f"https://{server}.gofile.io/contents/uploadfile"
 
-        with open(file_path, "rb") as f:
-            fields = {"file": (filename, f, "application/octet-stream")}
-            if folder_id:
-                fields["folderId"] = folder_id
-            if self.token and self.token.strip():
-                fields["token"] = self.token.strip()
+        if HAS_TOOLBELT:
+            with open(file_path, "rb") as f:
+                fields = {"file": (filename, f, "application/octet-stream")}
+                if folder_id:
+                    fields["folderId"] = folder_id
+                if self.token and self.token.strip():
+                    fields["token"] = self.token.strip()
 
-            encoder = MultipartEncoder(fields=fields)
+                encoder = MultipartEncoder(fields=fields)
 
-            if HAS_RICH:
-                with Progress(
-                    TextColumn("[bold yellow]{task.description}"),
-                    BarColumn(complete_style="bold yellow", finished_style="bold yellow"),
-                    DownloadColumn(),
-                    TransferSpeedColumn(),
-                    TimeRemainingColumn(),
-                ) as progress:
-                    task = progress.add_task(f"🚀 Turbo Upload ({server}) {filename}", total=file_size)
+                if HAS_RICH:
+                    with Progress(
+                        TextColumn("[bold yellow]{task.description}"),
+                        BarColumn(complete_style="bold yellow", finished_style="bold yellow"),
+                        DownloadColumn(),
+                        TransferSpeedColumn(),
+                        TimeRemainingColumn(),
+                    ) as progress:
+                        task = progress.add_task(f"🚀 Turbo Upload ({server}) {filename}", total=file_size)
 
+                        def _monitor_callback(monitor):
+                            progress.update(task, completed=monitor.bytes_read)
+                            if progress_callback:
+                                progress_callback(monitor.bytes_read, file_size)
+
+                        monitor = MultipartEncoderMonitor(encoder, _monitor_callback)
+                        headers = {"Content-Type": monitor.content_type, "Expect": ""}
+
+                        res = self.session.post(upload_url, data=monitor, headers=headers, timeout=1800)
+                else:
                     def _monitor_callback(monitor):
-                        progress.update(task, completed=monitor.bytes_read)
                         if progress_callback:
                             progress_callback(monitor.bytes_read, file_size)
 
@@ -213,15 +227,15 @@ class GoFileUploader:
                     headers = {"Content-Type": monitor.content_type, "Expect": ""}
 
                     res = self.session.post(upload_url, data=monitor, headers=headers, timeout=1800)
-            else:
-                def _monitor_callback(monitor):
-                    if progress_callback:
-                        progress_callback(monitor.bytes_read, file_size)
-
-                monitor = MultipartEncoderMonitor(encoder, _monitor_callback)
-                headers = {"Content-Type": monitor.content_type, "Expect": ""}
-
-                res = self.session.post(upload_url, data=monitor, headers=headers, timeout=1800)
+        else:
+            with open(file_path, "rb") as f:
+                files = {"file": (filename, f, "application/octet-stream")}
+                data_payload = {}
+                if folder_id:
+                    data_payload["folderId"] = folder_id
+                if self.token and self.token.strip():
+                    data_payload["token"] = self.token.strip()
+                res = self.session.post(upload_url, files=files, data=data_payload, timeout=1800)
 
             res.raise_for_status()
             response_data = res.json()

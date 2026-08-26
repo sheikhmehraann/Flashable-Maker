@@ -2,9 +2,14 @@
 
 import re
 import urllib.parse
-import httpx
 from typing import Optional
 from .base import BaseResolver, ResolvedURL
+
+try:
+    import httpx
+except ImportError:
+    httpx = None
+import requests
 
 
 class SourceForgeResolver(BaseResolver):
@@ -26,36 +31,45 @@ class SourceForgeResolver(BaseResolver):
         headers = {"User-Agent": "Wget/1.21.3"}
 
         # Follow redirect chain with Wget user-agent to get direct signed mirror CDN URL
-        with httpx.Client(follow_redirects=True, timeout=45.0) as client:
-            resp = client.head(cleaned_url, headers=headers)
-            if resp.status_code >= 400 or "content-length" not in resp.headers:
-                resp = client.get(cleaned_url, headers=headers)
+        if httpx is not None:
+            with httpx.Client(follow_redirects=True, timeout=45.0) as client:
+                resp = client.head(cleaned_url, headers=headers)
+                if resp.status_code >= 400 or "content-length" not in resp.headers:
+                    resp = client.get(cleaned_url, headers=headers)
 
-            direct_url = str(resp.url)
-            file_size = int(resp.headers.get("Content-Length", 0)) or None
-            
-            filename = None
-            cd = resp.headers.get("Content-Disposition", "")
-            if "filename=" in cd:
-                fname_match = re.search(r'filename="?([^";]+)"?', cd)
-                if fname_match:
-                    filename = fname_match.group(1)
+                direct_url = str(resp.url)
+                file_size = int(resp.headers.get("Content-Length", 0)) or None
+                cd = resp.headers.get("Content-Disposition", "")
+        else:
+            with requests.Session() as s:
+                resp = s.head(cleaned_url, headers=headers, allow_redirects=True, timeout=45)
+                if resp.status_code >= 400 or "content-length" not in resp.headers:
+                    resp = s.get(cleaned_url, headers=headers, stream=True, allow_redirects=True, timeout=45)
+                direct_url = str(resp.url)
+                file_size = int(resp.headers.get("Content-Length", 0)) or None
+                cd = resp.headers.get("Content-Disposition", "")
 
-            if not filename:
-                parsed = urllib.parse.urlparse(direct_url)
-                path_part = parsed.path.rstrip("/")
-                if path_part:
-                    filename = path_part.split("/")[-1]
+        filename = None
+        if "filename=" in cd:
+            fname_match = re.search(r'filename="?([^";]+)"?', cd)
+            if fname_match:
+                filename = fname_match.group(1)
 
-            if not filename or filename == "download":
-                parsed = urllib.parse.urlparse(cleaned_url.replace("/download", ""))
-                filename = parsed.path.split("/")[-1]
+        if not filename:
+            parsed = urllib.parse.urlparse(direct_url)
+            path_part = parsed.path.rstrip("/")
+            if path_part:
+                filename = path_part.split("/")[-1]
 
-            return ResolvedURL(
-                direct_url=direct_url,
-                filename=filename,
-                file_size=file_size,
-                headers=headers,
-                supports_ranges=True,
-                mirror_urls=[direct_url]
-            )
+        if not filename or filename == "download":
+            parsed = urllib.parse.urlparse(cleaned_url.replace("/download", ""))
+            filename = parsed.path.split("/")[-1]
+
+        return ResolvedURL(
+            direct_url=direct_url,
+            filename=filename,
+            file_size=file_size,
+            headers=headers,
+            supports_ranges=True,
+            mirror_urls=[direct_url]
+        )

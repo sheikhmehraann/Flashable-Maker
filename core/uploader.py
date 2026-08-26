@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Flashable-Engine: Cloud Uploader Module
-Uploads generated flashable packages to Gofile.io, Transfer.sh, or other file hosts.
+⚡ core/uploader.py - Flashable-Engine Cloud Uploader Module ⚡
+Seamlessly uploads generated flashable packages to Gofile.io or Transfer.sh.
 """
 
+import os
 import sys
 import json
 import urllib.request
@@ -11,17 +13,14 @@ import urllib.parse
 from pathlib import Path
 from typing import Optional, Dict
 
-try:
-    import requests
-except ImportError:
-    requests = None
+from gofile_transfer.uploader import GoFileUploader, GoFileResult
 
 
 class CloudUploader:
     """Handles automatic upload to high-speed hosting providers."""
 
     @staticmethod
-    def upload_gofile(file_path: Path) -> Optional[str]:
+    def upload_gofile(file_path: Path, token: Optional[str] = None) -> Optional[str]:
         """Uploads file to Gofile.io and returns the public download link."""
         file_path = Path(file_path).resolve()
         if not file_path.exists():
@@ -30,64 +29,16 @@ class CloudUploader:
 
         print(f"\n[GOFILE] Uploading {file_path.name} ({file_path.stat().st_size / (1024*1024):.2f} MB) to Gofile.io...")
 
-        # 1. Get Best Server
-        server = "store1"
+        token_to_use = token or os.environ.get("GOFILE_TOKEN", "").strip() or None
+
         try:
-            req = urllib.request.Request("https://api.gofile.io/servers", headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                if data.get("status") == "ok":
-                    server_data = data.get("data", {})
-                    servers = server_data.get("servers", [])
-                    if isinstance(servers, list) and servers:
-                        for s in servers:
-                            if isinstance(s, dict) and s.get("status") == "online" and s.get("name"):
-                                server = s["name"]
-                                break
-                            elif isinstance(s, dict) and s.get("name"):
-                                server = s["name"]
-                                break
-                            elif isinstance(s, str):
-                                server = s
-                                break
-                    elif isinstance(server_data.get("server"), str):
-                        server = server_data["server"]
+            uploader = GoFileUploader(token=token_to_use)
+            result: GoFileResult = uploader.upload(str(file_path))
+            if result and result.download_page:
+                print(f"[GOFILE] ✅ Upload Successful! Download Page: {result.download_page}")
+                return result.download_page
         except Exception as e:
-            print(f"[GOFILE] Warning: Could not fetch server list ({e}), using default '{server}'")
-
-        upload_url = f"https://{server}.gofile.io/contents/uploadfile"
-        print(f"[GOFILE] Target Server: {server} ({upload_url})")
-
-        # 2. Upload with requests (if available) or curl
-        if requests:
-            try:
-                with open(file_path, "rb") as f:
-                    files = {"file": (file_path.name, f)}
-                    response = requests.post(upload_url, files=files, timeout=600)
-                    res_json = response.json()
-                    if res_json.get("status") == "ok":
-                        link = res_json["data"]["downloadPage"]
-                        print(f"[GOFILE] ✅ Upload Successful! Download Page: {link}")
-                        return link
-                    else:
-                        print(f"[GOFILE] API Error: {res_json}")
-            except Exception as e:
-                print(f"[GOFILE] Upload error via requests: {e}")
-
-        # Fallback to curl
-        import shutil
-        import subprocess
-        if shutil.which("curl"):
-            try:
-                cmd = ["curl", "-s", "-F", f"file=@{file_path}", upload_url]
-                out = subprocess.check_output(cmd, timeout=600).decode("utf-8", errors="ignore")
-                res_json = json.loads(out)
-                if res_json.get("status") == "ok":
-                    link = res_json["data"]["downloadPage"]
-                    print(f"[GOFILE] ✅ Upload Successful! Download Page: {link}")
-                    return link
-            except Exception as e:
-                print(f"[GOFILE] Fallback curl upload error: {e}")
+            print(f"[GOFILE] Upload failed: {e}")
 
         return None
 
@@ -101,9 +52,10 @@ class CloudUploader:
         print(f"\n[TRANSFER.SH] Uploading {file_path.name}...")
         import shutil
         import subprocess
-        if shutil.which("curl"):
+        curl_bin = "curl.exe" if shutil.which("curl.exe") else ("curl" if shutil.which("curl") else None)
+        if curl_bin:
             try:
-                cmd = ["curl", "-s", "--upload-file", str(file_path), f"https://transfer.sh/{file_path.name}"]
+                cmd = [curl_bin, "-sSL", "--upload-file", str(file_path), f"https://transfer.sh/{file_path.name}"]
                 link = subprocess.check_output(cmd, timeout=300).decode("utf-8").strip()
                 print(f"[TRANSFER.SH] ✅ Upload Successful! Download Link: {link}")
                 return link

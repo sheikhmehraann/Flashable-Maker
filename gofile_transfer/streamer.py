@@ -4,8 +4,18 @@ import os
 import time
 import requests
 from typing import Optional, Callable, Iterator
-from requests_toolbelt import MultipartEncoder, MultipartEncoderMonitor
-from rich.progress import Progress, TextColumn, BarColumn, DownloadColumn, TransferSpeedColumn, TimeRemainingColumn
+
+try:
+    from requests_toolbelt import MultipartEncoder, MultipartEncoderMonitor
+    HAS_TOOLBELT = True
+except ImportError:
+    HAS_TOOLBELT = False
+
+try:
+    from rich.progress import Progress, TextColumn, BarColumn, DownloadColumn, TransferSpeedColumn, TimeRemainingColumn
+    HAS_RICH = True
+except ImportError:
+    HAS_RICH = False
 
 from .resolvers import ResolvedURL
 from .uploader import GoFileUploader, GoFileResult
@@ -88,46 +98,71 @@ class DirectStreamPipe:
 
         stream_obj = StreamWrapper(in_res, file_size=total_size, chunk_size=self.chunk_size)
 
-        fields = {"file": (filename, stream_obj, "application/octet-stream")}
-        if folder_id:
-            fields["folderId"] = folder_id
-        if self.uploader.token:
-            fields["token"] = self.uploader.token
+        if HAS_TOOLBELT:
+            fields = {"file": (filename, stream_obj, "application/octet-stream")}
+            if folder_id:
+                fields["folderId"] = folder_id
+            if self.uploader.token:
+                fields["token"] = self.uploader.token
 
-        encoder = MultipartEncoder(fields=fields)
+            encoder = MultipartEncoder(fields=fields)
 
-        with Progress(
-            TextColumn("[bold magenta]{task.description}"),
-            BarColumn(),
-            DownloadColumn(),
-            TransferSpeedColumn(),
-            TimeRemainingColumn(),
-        ) as progress:
-            task = progress.add_task(f"⚡ Live Stream Pipe ({server}) {filename}", total=total_size or 0)
+            if HAS_RICH:
+                with Progress(
+                    TextColumn("[bold magenta]{task.description}"),
+                    BarColumn(),
+                    DownloadColumn(),
+                    TransferSpeedColumn(),
+                    TimeRemainingColumn(),
+                ) as progress:
+                    task = progress.add_task(f"⚡ Live Stream Pipe ({server}) {filename}", total=total_size or 0)
 
-            def _monitor_callback(monitor):
-                progress.update(task, completed=monitor.bytes_read)
-                if progress_callback:
-                    progress_callback(monitor.bytes_read, total_size or 0)
+                    def _monitor_callback(monitor):
+                        progress.update(task, completed=monitor.bytes_read)
+                        if progress_callback:
+                            progress_callback(monitor.bytes_read, total_size or 0)
 
-            monitor = MultipartEncoderMonitor(encoder, _monitor_callback)
-            headers = {"Content-Type": monitor.content_type}
+                    monitor = MultipartEncoderMonitor(encoder, _monitor_callback)
+                    headers = {"Content-Type": monitor.content_type}
+                    if self.uploader.token:
+                        headers["Authorization"] = f"Bearer {self.uploader.token}"
+
+                    out_res = self.uploader.session.post(upload_url, data=monitor, headers=headers, timeout=900)
+            else:
+                def _monitor_callback(monitor):
+                    if progress_callback:
+                        progress_callback(monitor.bytes_read, total_size or 0)
+
+                monitor = MultipartEncoderMonitor(encoder, _monitor_callback)
+                headers = {"Content-Type": monitor.content_type}
+                if self.uploader.token:
+                    headers["Authorization"] = f"Bearer {self.uploader.token}"
+
+                out_res = self.uploader.session.post(upload_url, data=monitor, headers=headers, timeout=900)
+        else:
+            files = {"file": (filename, stream_obj.read(), "application/octet-stream")}
+            data_payload = {}
+            if folder_id:
+                data_payload["folderId"] = folder_id
+            if self.uploader.token:
+                data_payload["token"] = self.uploader.token
+            headers = {}
             if self.uploader.token:
                 headers["Authorization"] = f"Bearer {self.uploader.token}"
+            out_res = self.uploader.session.post(upload_url, files=files, data=data_payload, headers=headers, timeout=900)
 
-            out_res = self.uploader.session.post(upload_url, data=monitor, headers=headers, timeout=900)
-            out_res.raise_for_status()
-            res_data = out_res.json()
+        out_res.raise_for_status()
+        res_data = out_res.json()
 
-            if res_data.get("status") != "ok":
-                raise RuntimeError(f"GoFile stream upload failed: {res_data}")
+        if res_data.get("status") != "ok":
+            raise RuntimeError(f"GoFile stream upload failed: {res_data}")
 
-            data = res_data["data"]
-            return GoFileResult(
-                download_page=data.get("downloadPage", f"https://gofile.io/d/{data.get('code', '')}"),
-                code=data.get("code", ""),
-                file_id=data.get("fileId", ""),
-                file_name=data.get("fileName", filename),
-                parent_folder=data.get("parentFolder"),
-                md5=data.get("md5")
-            )
+        data = res_data["data"]
+        return GoFileResult(
+            download_page=data.get("downloadPage", f"https://gofile.io/d/{data.get('code', '')}"),
+            code=data.get("code", ""),
+            file_id=data.get("fileId", ""),
+            file_name=data.get("fileName", filename),
+            parent_folder=data.get("parentFolder"),
+            md5=data.get("md5")
+        )

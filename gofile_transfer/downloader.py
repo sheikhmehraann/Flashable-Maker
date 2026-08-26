@@ -4,8 +4,11 @@ import os
 import sys
 import time
 import shutil
-import subprocess
-import httpx
+try:
+    import httpx
+except ImportError:
+    httpx = None
+import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Callable, List
 
@@ -215,15 +218,33 @@ class ParallelDownloader:
 
                     for attempt in range(self.max_retries):
                         try:
-                            with httpx.Client(follow_redirects=True, timeout=60.0, cookies=resolved.cookies) as client:
-                                with client.stream("GET", resolved.direct_url, headers=range_headers) as response:
+                            if httpx is not None:
+                                with httpx.Client(follow_redirects=True, timeout=60.0, cookies=resolved.cookies) as client:
+                                    with client.stream("GET", resolved.direct_url, headers=range_headers) as response:
+                                        response.raise_for_status()
+                                        if response.status_code != 206 and workers > 1:
+                                            raise RuntimeError(f"Server returned HTTP {response.status_code} instead of 206 Partial Content")
+                                        current_pos = start
+                                        with open(output_path, "rb+") as f:
+                                            f.seek(start)
+                                            for chunk in response.iter_bytes(chunk_size=self.chunk_size):
+                                                if chunk:
+                                                    f.write(chunk)
+                                                    chunk_len = len(chunk)
+                                                    current_pos += chunk_len
+                                                    downloaded_bytes += chunk_len
+                                                    progress.update(task, completed=downloaded_bytes)
+                                                    if progress_callback:
+                                                        progress_callback(downloaded_bytes, file_size)
+                            else:
+                                with requests.get(resolved.direct_url, headers=range_headers, cookies=resolved.cookies, stream=True, timeout=60.0) as response:
                                     response.raise_for_status()
                                     if response.status_code != 206 and workers > 1:
                                         raise RuntimeError(f"Server returned HTTP {response.status_code} instead of 206 Partial Content")
                                     current_pos = start
                                     with open(output_path, "rb+") as f:
                                         f.seek(start)
-                                        for chunk in response.iter_bytes(chunk_size=self.chunk_size):
+                                        for chunk in response.iter_content(chunk_size=self.chunk_size):
                                             if chunk:
                                                 f.write(chunk)
                                                 chunk_len = len(chunk)
@@ -250,15 +271,32 @@ class ParallelDownloader:
 
                 for attempt in range(self.max_retries):
                     try:
-                        with httpx.Client(follow_redirects=True, timeout=60.0, cookies=resolved.cookies) as client:
-                            with client.stream("GET", resolved.direct_url, headers=range_headers) as response:
+                        if httpx is not None:
+                            with httpx.Client(follow_redirects=True, timeout=60.0, cookies=resolved.cookies) as client:
+                                with client.stream("GET", resolved.direct_url, headers=range_headers) as response:
+                                    response.raise_for_status()
+                                    if response.status_code != 206 and workers > 1:
+                                        raise RuntimeError(f"Server returned HTTP {response.status_code} instead of 206 Partial Content")
+                                    current_pos = start
+                                    with open(output_path, "rb+") as f:
+                                        f.seek(start)
+                                        for chunk in response.iter_bytes(chunk_size=self.chunk_size):
+                                            if chunk:
+                                                f.write(chunk)
+                                                chunk_len = len(chunk)
+                                                current_pos += chunk_len
+                                                downloaded_bytes += chunk_len
+                                                if progress_callback:
+                                                    progress_callback(downloaded_bytes, file_size)
+                        else:
+                            with requests.get(resolved.direct_url, headers=range_headers, cookies=resolved.cookies, stream=True, timeout=60.0) as response:
                                 response.raise_for_status()
                                 if response.status_code != 206 and workers > 1:
                                     raise RuntimeError(f"Server returned HTTP {response.status_code} instead of 206 Partial Content")
                                 current_pos = start
                                 with open(output_path, "rb+") as f:
                                     f.seek(start)
-                                    for chunk in response.iter_bytes(chunk_size=self.chunk_size):
+                                    for chunk in response.iter_content(chunk_size=self.chunk_size):
                                         if chunk:
                                             f.write(chunk)
                                             chunk_len = len(chunk)

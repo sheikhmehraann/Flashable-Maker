@@ -5,8 +5,9 @@ from .downloader import ParallelDownloader
 from .uploader import GoFileUploader, GoFileResult
 from .streamer import DirectStreamPipe, StreamWrapper
 from .resolvers import ResolverFactory, ResolvedURL
+from .token_generator import TokenGenerator, token_generator
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 __all__ = [
     "TransferPipeline",
@@ -18,4 +19,6 @@ __all__ = [
     "StreamWrapper",
     "ResolverFactory",
     "ResolvedURL",
+    "TokenGenerator",
+    "token_generator",
 ]
