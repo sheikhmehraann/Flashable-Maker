@@ -69,9 +69,19 @@ Patching firmware to both slots
  
 Patching system
 - Flashing partition boot to both slots
+- Flashing partition dtbo to both slots
+- Flashing partition init_boot to both slots
+- Flashing partition vendor_boot to both slots
+- Flashing partition vbmeta to both slots
  
 - Configuring AVB 2.0 (Vbmeta)
-  - AVB Status : Already Enabled (Skipped)
+  - AVB Status : Enabled
+ 
+Patching super partitions
+- Flashing partition system_a
+- Flashing partition vendor_a
+- Flashing partition product_a
+- Flashing partition system_ext_a
  
 ============================================
            Flashed Successfully!
