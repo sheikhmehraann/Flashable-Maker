@@ -1,563 +1,240 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-⚡ core/builder.py - Ultra-Fast Flashable Recovery Package Builder ⚡
-Implements zero-copy pass-through, multi-process Zstandard parallel compression,
-dynamic updater script generation, and native multi-threaded STORE-mode ZIP packaging.
-"""
-
 import os
-import sys
 import shutil
 import subprocess
-from pathlib import Path
+import sys
+import time
+import zipfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Dict, List, Tuple, Any
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-from .extractor import PartitionExtractor
+from .avb import AvbManager
+from .partitions import scan_partitions, get_zstd_uncompressed_size
+from .recovery import generate_update_binary
+from .windows import WindowsPlatform, WindowsInstaller
+from .linux import LinuxPlatform, LinuxInstaller
+from .termux import TermuxPlatform, TermuxInstaller
 
-SUPER_PARTITIONS = {
-    "system", "vendor", "product", "system_dlkm", "system_ext",
-    "vendor_dlkm", "odm_dlkm", "odm", "mi_ext", "cust",
-    "prism", "optics", "my_product", "my_stock", "my_heytap",
-    "my_carrier", "my_region", "my_manifest", "my_preload",
-    "my_company", "my_engineering", "my_bigball"
-}
-SUPER_TR_PARTITIONS = {
-    "tr_carrier", "tr_company", "tr_mi", "tr_overlayfs",
-    "tr_preload", "tr_product", "tr_region", "tr_theme",
-    "tr_manifest", "tr_misc", "tr_vintf", "tr_vendor"
-}
-ALL_KNOWN_DYNAMIC_PARTITIONS = sorted(list(SUPER_PARTITIONS | SUPER_TR_PARTITIONS))
-SYSTEMS = {
-    "boot", "dtbo", "init_boot", "vendor_boot",
-    "vbmeta", "vbmeta_system", "vbmeta_vendor", "recovery"
-}
-FIRMWARES = {
-    "apusys", "cam_vpu1", "cam_vpu2", "cam_vpu3", "ccu", "connsys_bt",
-    "dpm", "gpueb", "gz", "lk", "logo", "mcf_ota", "mcupm", "md1img",
-    "mvpu_algo", "pi_img", "preloader_raw", "scp", "spmfw", "sspm",
-    "tee", "tkv", "vcp"
-}
+
+def get_current_platform():
+    if TermuxPlatform.is_termux():
+        return TermuxPlatform
+    if sys.platform.startswith("win"):
+        return WindowsPlatform
+    return LinuxPlatform
+
+
+def get_host_zstd() -> str:
+    plat = get_current_platform()
+    z_bin = plat.get_zstd_binary()
+    if z_bin and os.path.isfile(z_bin):
+        return z_bin
+    return shutil.which("zstd.exe") or shutil.which("zstd") or ""
+
 
 def fast_stage_file(src: str, dst: str):
-    """Zero-copy staging via filesystem hardlink or atomic copy."""
     if os.path.exists(dst):
-        os.remove(dst)
+        try:
+            os.remove(dst)
+        except OSError:
+            pass
     try:
         os.link(src, dst)
     except (OSError, AttributeError):
         shutil.copy2(src, dst)
 
-def compress_single_image_worker(task: Tuple[str, str, str, int, int]) -> Tuple[str, int]:
-    """
-    Worker task: Compresses a raw .img partition using multi-threaded zstd (Level 0-22).
-    """
-    name, in_file, out_file, level, raw_size = task
-    
-    if level <= 0:
-        # Level 0 = Ultra-Fast Instant Framing (--fast=10 delivers >3.5 GB/s throughput)
-        cmd = ["zstd", "--fast=10", "-T0", "-f", "-q", in_file, "-o", out_file]
-    elif level >= 20:
-        # Ultra compression mode
-        cmd = ["zstd", f"-{level}", "--ultra", "-T0", "-f", "-q", in_file, "-o", out_file]
-    else:
-        cmd = ["zstd", f"-{level}", "-T0", "-f", "-q", in_file, "-o", out_file]
 
-    if shutil.which("zstd") or shutil.which("zstd.exe"):
-        z_bin = "zstd.exe" if shutil.which("zstd.exe") else "zstd"
-        cmd[0] = z_bin
-        subprocess.run(cmd, check=True)
+def compress_single_image_worker(task: Tuple[str, str, str, int, int, int, str]) -> Tuple[str, int]:
+    name, in_file, out_file, level, raw_size, threads, z_bin = task
+
+    th_arg = f"-T{threads}"
+    if level <= 0:
+        cmd_args = ["--fast=10", th_arg, "-f", "-q", in_file, "-o", out_file]
+    elif level >= 20:
+        cmd_args = [f"-{level}", "--ultra", th_arg, "-f", "-q", in_file, "-o", out_file]
     else:
-        import zstandard
-        c_level = max(1, min(level, 19 if level > 19 else level))
-        cctx = zstandard.ZstdCompressor(level=c_level)
-        with open(in_file, "rb") as ifh, open(out_file, "wb") as ofh:
-            cctx.copy_stream(ifh, ofh)
+        cmd_args = [f"-{level}", th_arg, "-f", "-q", in_file, "-o", out_file]
+
+    compressed = False
+    if z_bin and os.path.isfile(z_bin):
+        try:
+            subprocess.run([z_bin] + cmd_args, check=True)
+            compressed = True
+        except Exception:
+            pass
+
+    if not compressed:
+        try:
+            import zstandard
+            c_level = max(1, min(level, 19 if level > 19 else (1 if level <= 0 else level)))
+            try:
+                cctx = zstandard.ZstdCompressor(level=c_level, threads=threads)
+            except TypeError:
+                cctx = zstandard.ZstdCompressor(level=c_level)
+            with open(in_file, "rb") as ifh, open(out_file, "wb") as ofh:
+                cctx.copy_stream(ifh, ofh)
+        except Exception as e:
+            raise RuntimeError(f"Compression failed for {in_file}: {e}")
+
     return name, raw_size
 
+
+class BuildResult(str):
+    def __new__(cls, path: str, **kwargs):
+        obj = super().__new__(cls, path)
+        for k, v in kwargs.items():
+            setattr(obj, k, v)
+        return obj
+
+
 class FlashableBuilder:
-    """Orchestrates high-speed recovery package synthesis."""
-
     @classmethod
-    def generate_update_binary(
-        cls,
-        device: str,
-        firmware: str,
-        codename: str,
-        super_specs: List[Tuple[str, int]],
-        system_imgs: List[str],
-        firmware_imgs: List[str],
-        tr_specs: List[Tuple[str, int]],
-        maintainer: str = "Mehraan",
-        vbmeta_option: str = "skip",
-        use_zstd: bool = True
-    ) -> str:
-        """Generates dynamic updater-binary shell script with bulletproof logical partition handling."""
-        sb = [
-            "#!/sbin/sh",
-            "OUTFD=/proc/self/fd/$2",
-            'ZIPFILE="$3"',
-            "",
-            "ui_print() {",
-            '    printf \'ui_print %s\\nui_print\\n\' "$1" >>"$OUTFD"',
-            "}",
-            "",
-            "# Prioritize bundled recovery binaries in PATH",
-            'export PATH="/tmp/META-INF/bin:/tmp/META-INF:/sbin:/system/bin:/bin:$PATH"',
-            "",
-            'LPTOOLS="/tmp/META-INF/bin/lptools"',
-            '[ ! -f "$LPTOOLS" ] && LPTOOLS="lptools"',
-            "",
-            'ZSTD_BIN="/tmp/META-INF/zstd"',
-            '[ ! -f "$ZSTD_BIN" ] && ZSTD_BIN="zstd"',
-            "",
-            'AVB_BIN="/tmp/META-INF/bin/avbctl"',
-            '[ ! -f "$AVB_BIN" ] && AVB_BIN="avbctl"',
-            "",
-            "find_block_device() {",
-            '    name="$1"',
-            '    for base in /dev/block/by-name /dev/block/bootdevice/by-name /dev/block/platform/*/by-name /dev/block/platform/*/*/by-name; do',
-            '        if [ -e "$base/$name" ]; then',
-            '            echo "$base/$name"',
-            '            return 0',
-            '        fi',
-            '    done',
-            '    echo "/dev/block/by-name/$name"',
-            "}",
-            "",
-            "find_mapper_device() {",
-            '    name="$1"',
-            '    for base in /dev/block/mapper /dev/mapper /dev/block/by-name; do',
-            '        if [ -b "$base/$name" ] || [ -e "$base/$name" ]; then',
-            '            echo "$base/$name"',
-            '            return 0',
-            '        fi',
-            '    done',
-            '    $LPTOOLS map "$name" 2>/dev/null || true',
-            '    for base in /dev/block/mapper /dev/mapper /dev/block/by-name; do',
-            '        if [ -b "$base/$name" ] || [ -e "$base/$name" ]; then',
-            '            echo "$base/$name"',
-            '            return 0',
-            '        fi',
-            '    done',
-            '    echo "/dev/block/mapper/$name"',
-            "}",
-            "",
-            "flash_partition() {",
-            '    src="$1"; dest="$2"; msg="$3"',
-            '    if [ "$#" -lt 3 ]; then',
-            '        partition_name=$(basename "$dest")',
-            '        ui_print "- Flashing partition $partition_name"',
-            '    elif [ -n "$msg" ]; then',
-            '        ui_print "$msg"',
-            '    fi',
-            '    unzip -p "$ZIPFILE" "$src" >"$dest" || {',
-            '        ui_print "Error: Failed to flash $src to $dest"',
-            '        exit 1',
-            '    }',
-            "}",
-            "",
-            "flash_partition_zstd() {",
-            '    src="$1"; dest="$2"',
-            '    partition_name=$(basename "$dest")',
-            '    ui_print "- Flashing partition $partition_name"',
-            '    unzip -p "$ZIPFILE" "$src" | $ZSTD_BIN -c -d -T0 --no-check >"$dest" || {',
-            '        ui_print "Error: Failed to flash compressed $src to $dest"',
-            '        exit 1',
-            '    }',
-            "}",
-            "",
-            "flash_partition_both_slots() {",
-            '    img_file="$1"; base_name="$2"',
-            '    dev_a=$(find_block_device "${base_name}_a")',
-            '    dev_b=$(find_block_device "${base_name}_b")',
-            '    if [ -e "$dev_a" ] || [ -e "$dev_b" ]; then',
-            '        ui_print "- Flashing partition ${base_name} to both slots"',
-            '        [ -e "$dev_a" ] && { unzip -p "$ZIPFILE" "$img_file" >"$dev_a" || { ui_print "Error: Failed flashing $img_file to $dev_a"; exit 1; }; }',
-            '        [ -e "$dev_b" ] && { unzip -p "$ZIPFILE" "$img_file" >"$dev_b" || { ui_print "Error: Failed flashing $img_file to $dev_b"; exit 1; }; }',
-            '    else',
-            '        dev_single=$(find_block_device "${base_name}")',
-            '        if [ -e "$dev_single" ]; then',
-            '            ui_print "- Flashing partition ${base_name}"',
-            '            unzip -p "$ZIPFILE" "$img_file" >"$dev_single" || { ui_print "Error: Failed flashing $img_file to $dev_single"; exit 1; }',
-            '        else',
-            '            ui_print "- Flashing partition ${base_name}"',
-            '            unzip -p "$ZIPFILE" "$img_file" >"/dev/block/by-name/${base_name}" 2>/dev/null || true',
-            '        fi',
-            '    fi',
-            "}",
-            "",
-            "flash_partition_zstd_both_slots() {",
-            '    img_file="$1"; base_name="$2"',
-            '    dev_a=$(find_block_device "${base_name}_a")',
-            '    dev_b=$(find_block_device "${base_name}_b")',
-            '    if [ -e "$dev_a" ] || [ -e "$dev_b" ]; then',
-            '        ui_print "- Flashing partition ${base_name} to both slots"',
-            '        [ -e "$dev_a" ] && { unzip -p "$ZIPFILE" "$img_file" | $ZSTD_BIN -c -d -T0 --no-check >"$dev_a" || { ui_print "Error: Failed flashing $img_file to $dev_a"; exit 1; }; }',
-            '        [ -e "$dev_b" ] && { unzip -p "$ZIPFILE" "$img_file" | $ZSTD_BIN -c -d -T0 --no-check >"$dev_b" || { ui_print "Error: Failed flashing $img_file to $dev_b"; exit 1; }; }',
-            '    else',
-            '        dev_single=$(find_block_device "${base_name}")',
-            '        if [ -e "$dev_single" ]; then',
-            '            ui_print "- Flashing partition ${base_name}"',
-            '            unzip -p "$ZIPFILE" "$img_file" | $ZSTD_BIN -c -d -T0 --no-check >"$dev_single" || { ui_print "Error: Failed flashing $img_file to $dev_single"; exit 1; }',
-            '        else',
-            '            ui_print "- Flashing partition ${base_name}"',
-            '            unzip -p "$ZIPFILE" "$img_file" | $ZSTD_BIN -c -d -T0 --no-check >"/dev/block/by-name/${base_name}" 2>/dev/null || true',
-            '        fi',
-            '    fi',
-            "}",
-            "",
-            "getVolumeKey() {",
-            '    ui_print "- Listening to volume keys. Press [+] for \'Yes\' and [-] for \'No\'"',
-            "    while true; do",
-            '        keyInfo=$(getevent -qlc 1 | grep KEY_VOLUME)',
-            '        [ -z "$keyInfo" ] && continue',
-            '        isUpKey=$(printf \'%s\\n\' "$keyInfo" | grep KEY_VOLUMEUP)',
-            '        if [ -n "$isUpKey" ]; then return 0; else return 1; fi',
-            "    done",
-            "}",
-            "",
-            "checkDevice() {",
-            '    myDevice=$(getprop ro.product.device)',
-            '    [ -z "$myDevice" ] && myDevice=$(getprop ro.build.product)',
-            '    [ -z "$myDevice" ] && myDevice=$(getprop ro.product.name)',
-            f'    romDevice="{codename}"',
-            '    if [ -z "$(echo "$myDevice" | grep -i "$romDevice")" ]; then',
-            '        ui_print "- Device verification: Target model mismatch! Current: $myDevice, Expected: $romDevice"',
-            '        ui_print "- Flashing wrong package may cause bricking. Do you wish to continue?"',
-            '        if ! getVolumeKey; then ui_print "- You chose to abort flashing."; exit 1;',
-            '        else ui_print "- You chose to continue flashing."; fi',
-            '    else',
-            f'        ui_print "- Target Device    : Verified {codename}"',
-            '    fi',
-            "}",
-            "",
-            "checkExit() {",
-            '    status=$?',
-            '    msg="$1"',
-            '    if [ "$status" -ne 0 ]; then',
-            '        if [ -n "$msg" ]; then',
-            '            ui_print "Error: $msg (exit status $status)"',
-            '        else',
-            '            ui_print "Error: Dynamic partition operation failed. Please flash stock super.img first, then retry."',
-            '        fi',
-            '        exit 1',
-            '    fi',
-            "}",
-            "",
-            "unmountPartitions() {",
-            '    umount -f -l /system /system_root /vendor /product /system_ext /vendor_dlkm /odm_dlkm /odm \\',
-            '                 /tr_carrier /tr_company /tr_mi /tr_preload /tr_product /tr_region /tr_theme \\',
-            '                 /tr_manifest /tr_misc /my_product /my_stock /my_heytap /my_carrier /my_region \\',
-            '                 /my_manifest /my_preload /my_company /my_engineering /my_bigball /cust /prism /optics /mnt/* 2>/dev/null || true',
-            "}",
-            "",
-            "manage_logical_partition() {",
-            '    operation="$1"',
-            '    partition="$2"',
-            '    size="$3"',
-            '    slot="$4"',
-            '    case "$operation" in',
-            '        clear)',
-            '            $LPTOOLS unmap "$partition$slot" 2>/dev/null || true',
-            '            $LPTOOLS remove "$partition$slot" 2>/dev/null || true',
-            '            ;;',
-            '        create)',
-            '            $LPTOOLS create "$partition$slot" "$size" || checkExit "Failed to create logical partition $partition$slot (size: $size bytes)"',
-            '            ;;',
-            '        create_optional)',
-            '            [ -n "$slot" ] && { $LPTOOLS create "$partition$slot" "$size" 2>/dev/null || true; }',
-            '            ;;',
-            '        map)',
-            '            [ -e "/dev/block/mapper/$partition$slot" ] || [ -e "/dev/mapper/$partition$slot" ] || { $LPTOOLS map "$partition$slot" 2>/dev/null || true; }',
-            '            ;;',
-            '        unmap_map)',
-            '            $LPTOOLS unmap "$partition$slot" 2>/dev/null || true',
-            '            $LPTOOLS map "$partition$slot" 2>/dev/null || true',
-            '            ;;',
-            '    esac',
-            "}",
-            "",
-            "create_partitions_for_slot() {",
-            '    target_slot="$1"',
-            '    other_slot="$2"',
-            '    shift 2',
-            '    for spec in "$@"; do',
-            '        partition="${spec%%:*}"',
-            '        size="${spec#*:}"',
-            '        manage_logical_partition "create" "$partition" "$size" "$target_slot"',
-            '        if [ -n "$other_slot" ]; then',
-            '            manage_logical_partition "create_optional" "$partition" "0" "$other_slot"',
-            '        fi',
-            '    done',
-            "}",
-            "",
-            "process_partitions_for_slots() {",
-            '    operation="$1"',
-            '    shift',
-            '    for partition in "$@"; do',
-            '        if [ "$IS_AB" -eq 1 ]; then',
-            '            manage_logical_partition "$operation" "$partition" "" "_a"',
-            '            manage_logical_partition "$operation" "$partition" "" "_b"',
-            '        else',
-            '            manage_logical_partition "$operation" "$partition" "" ""',
-            '        fi',
-            '    done',
-            "}",
-            "",
-            "process_partitions_for_slot() {",
-            '    operation="$1"',
-            '    slot="$2"',
-            '    shift 2',
-            '    for partition in "$@"; do',
-            '        manage_logical_partition "$operation" "$partition" "" "$slot"',
-            '    done',
-            "}",
-            "",
-            "# Extract recovery binaries explicitly without wildcard globs (Busybox/Toybox safe)",
-            'unzip -o "$ZIPFILE" META-INF/zstd -d /tmp >/dev/null 2>&1 || true',
-            'unzip -o "$ZIPFILE" META-INF/bin/lptools -d /tmp >/dev/null 2>&1 || true',
-            'unzip -o "$ZIPFILE" META-INF/bin/avbctl -d /tmp >/dev/null 2>&1 || true',
-            "chmod 0755 /tmp/META-INF/zstd /tmp/META-INF/bin/lptools /tmp/META-INF/bin/avbctl 2>/dev/null || true",
-            "",
-            'ui_print "============================================"',
-            'ui_print "         Flashing Script By Mehraan"',
-            'ui_print "============================================"',
-            'ui_print " "',
-            f'ui_print "Device: {device}"',
-            f'ui_print "Codename: {codename}"',
-            f'ui_print "Version: {firmware}"',
-            f'ui_print "Maintainer: {maintainer}"',
-            'ui_print "============================================"',
-            'ui_print " "',
-            "checkDevice",
-            "unmountPartitions",
-            "",
-            'SLOT=$(getprop ro.boot.slot_suffix)',
-            'IS_AB=1',
-            'OTHER_SLOT="_a"',
-            '[ "$SLOT" = "_a" ] && OTHER_SLOT="_b"',
-            'slot_display="A"',
-            '[ "$SLOT" = "_b" ] && slot_display="B"',
-            'if [ -z "$SLOT" ]; then',
-            '    IS_AB=0',
-            '    slot_display="A-Only"',
-            '    SLOT=""',
-            '    OTHER_SLOT=""',
-            'fi',
-            'ui_print "- Active Boot Slot : Slot ${slot_display}"',
-            "$LPTOOLS clear-cow 2>/dev/null || lptools clear-cow 2>/dev/null || true",
-            ""
-        ]
-
-        if firmware_imgs:
-            sb.append('ui_print " "')
-            sb.append('ui_print "Patching firmware to both slots"')
-            for fw in firmware_imgs:
-                if use_zstd:
-                    sb.append(f'flash_partition_zstd_both_slots "{fw}.img.zst" "{fw}"')
-                else:
-                    sb.append(f'flash_partition_both_slots "{fw}.img" "{fw}"')
-            sb.append("")
-
-        if system_imgs:
-            sb.append('ui_print " "')
-            sb.append('ui_print "Patching system"')
-            for sys_part in system_imgs:
-                if use_zstd:
-                    sb.append(f'flash_partition_zstd_both_slots "{sys_part}.img.zst" "{sys_part}"')
-                else:
-                    sb.append(f'flash_partition_both_slots "{sys_part}.img" "{sys_part}"')
-            sb.append("")
-
-        # AVB 2.0 (vbmeta) snippet
-        if vbmeta_option == "disable":
-            sb.extend([
-                'ui_print " "',
-                'ui_print "- Configuring AVB 2.0 (Vbmeta)"',
-                'if [ -f "$AVB_BIN" ] || which avbctl >/dev/null 2>&1; then',
-                '    VERITY=$($AVB_BIN get-verity 2>/dev/null)',
-                '    if echo "$VERITY" | grep -qi "disabled"; then',
-                '        ui_print "  - AVB Status : Already Disabled (Skipped)"',
-                '    else',
-                '        $AVB_BIN --force disable-verity >/dev/null 2>&1 || true',
-                '        $AVB_BIN --force disable-verification >/dev/null 2>&1 || true',
-                '        ui_print "  - AVB Status : Disabled"',
-                '    fi',
-                'fi',
-                ""
-            ])
-        elif vbmeta_option == "enable":
-            sb.extend([
-                'ui_print " "',
-                'ui_print "- Configuring AVB 2.0 (Vbmeta)"',
-                'if [ -f "$AVB_BIN" ] || which avbctl >/dev/null 2>&1; then',
-                '    VERITY=$($AVB_BIN get-verity 2>/dev/null)',
-                '    if echo "$VERITY" | grep -qi "enabled"; then',
-                '        ui_print "  - AVB Status : Already Enabled (Skipped)"',
-                '    else',
-                '        $AVB_BIN --force enable-verity >/dev/null 2>&1 || true',
-                '        $AVB_BIN --force enable-verification >/dev/null 2>&1 || true',
-                '        ui_print "  - AVB Status : Enabled"',
-                '    fi',
-                'fi',
-                ""
-            ])
-
-        all_dyn_specs = super_specs + tr_specs
-        if all_dyn_specs:
-            sb.append('ui_print " "')
-            sb.append('ui_print "Patching super partitions"')
-            
-            # Step 1: Pre-clear all present dynamic partitions
-            clear_parts = " ".join(f'"{p[0]}"' for p in all_dyn_specs)
-            sb.append(f'process_partitions_for_slots "clear" {clear_parts}')
-            sb.append("")
-
-            # Step 2: Create logical partitions for active slot and 0-byte for other slot
-            create_specs = " ".join(f'"{p[0]}:{p[1]}"' for p in all_dyn_specs)
-            sb.append(f'create_partitions_for_slot "$SLOT" "$OTHER_SLOT" {create_specs}')
-            sb.append("")
-
-            # Step 3: Stream flash decompressed images directly to mapper block devices
-            for part, _ in all_dyn_specs:
-                if use_zstd:
-                    sb.append(f'flash_partition_zstd "{part}.img.zst" "$(find_mapper_device {part}$SLOT)"')
-                else:
-                    sb.append(f'flash_partition "{part}.img" "$(find_mapper_device {part}$SLOT)"')
-
-            sb.append("")
-            # Step 4: Flush dirty page cache and reload kernel mapper tables
-            sb.append("sync")
-            map_parts = " ".join(f'"{p[0]}"' for p in all_dyn_specs)
-            sb.append(f'process_partitions_for_slot "unmap_map" "$SLOT" {map_parts}')
-
-        sb.extend([
-            "",
-            'ui_print " "',
-            'ui_print "============================================"',
-            'ui_print "           Flashed Successfully!"',
-            'ui_print "============================================"',
-            "exit 0"
-        ])
-        return "\n".join(sb)
-
-    @classmethod
-    def package_zip(cls, work_dir: str, output_zip: str, zip_level: int = 0):
-        """
-        Creates the final ZIP package with selectable compression level:
-        - level 0: STORE mode (Ultra-fast, instant write)
-        - level 1-9: DEFLATE mode (level 9 = Maximum Ultra Compression)
-        """
+    def package_zip(cls, work_dir: str, output_zip: str, zip_level: int = 1):
         abs_output = os.path.abspath(output_zip)
+        out_dir = os.path.dirname(abs_output)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
         if os.path.exists(abs_output):
             try:
                 os.remove(abs_output)
             except OSError:
                 pass
 
-        print(f"[*] [ZIP Packaging] Building final package (Compression Level {zip_level}): {output_zip}")
+        print(f"[*] Packaging ZIP (Level {zip_level}): {os.path.basename(output_zip)}")
 
-        if shutil.which("7z"):
-            if zip_level > 0:
-                cmd = ["7z", "a", "-tzip", f"-mx{zip_level}", "-mfb=258", "-mpass=15", "-mmt=on", abs_output, "."]
-            else:
-                cmd = ["7z", "a", "-tzip", "-mx0", "-mmt=on", abs_output, "."]
-            res = subprocess.run(cmd, cwd=work_dir, stdout=subprocess.DEVNULL)
-            if res.returncode != 0:
-                raise RuntimeError(f"7z packaging failed with exit code {res.returncode}")
-        elif shutil.which("zip"):
-            if zip_level > 0:
-                cmd = ["zip", f"-{zip_level}", "-q", "-r", abs_output, "."]
-            else:
-                cmd = ["zip", "-0", "-q", "-r", abs_output, "."]
-            subprocess.run(cmd, cwd=work_dir, check=True)
-        else:
-            import zipfile
-            compression = zipfile.ZIP_DEFLATED if zip_level > 0 else zipfile.ZIP_STORED
-            compresslevel = zip_level if zip_level > 0 else None
-            kwargs = {"compression": compression}
-            if compresslevel is not None:
-                kwargs["compresslevel"] = compresslevel
+        executable_names = {
+            "update-binary", "zstd", "lptools", "avbctl",
+            "rapidflasher-arm64", "lpdump", "lpmake", "fastboot",
+            "flash_linux.sh", "flash_termux.sh"
+        }
 
-            with zipfile.ZipFile(abs_output, "w", allowZip64=True, **kwargs) as z:
-                for root, dirs, files in os.walk(work_dir):
-                    for d in dirs:
-                        dp = os.path.join(root, d)
-                        rp = os.path.relpath(dp, work_dir).replace("\\", "/") + "/"
-                        zinfo = zipfile.ZipInfo(filename=rp)
-                        zinfo.date_time = time.localtime(os.stat(dp).st_mtime)[:6]
-                        zinfo.create_system = 3
-                        zinfo.external_attr = (0o040755) << 16
-                        z.writestr(zinfo, b"")
+        compression = zipfile.ZIP_STORED if zip_level == 0 else zipfile.ZIP_DEFLATED
+        kwargs = {"compresslevel": zip_level} if zip_level > 0 else {}
 
-                    for f in files:
-                        fp = os.path.join(root, f)
-                        rp = os.path.relpath(fp, work_dir).replace("\\", "/")
-                        st = os.stat(fp)
-                        zinfo = zipfile.ZipInfo(filename=rp)
-                        zinfo.date_time = time.localtime(st.st_mtime)[:6]
-                        zinfo.compress_type = compression
-                        zinfo.create_system = 3
-                        zinfo.file_size = st.st_size
+        with zipfile.ZipFile(abs_output, "w", compression=compression, allowZip64=True, **kwargs) as z:
+            for root, dirs, files in os.walk(work_dir):
+                for d in dirs:
+                    dp = os.path.join(root, d)
+                    rp = os.path.relpath(dp, work_dir).replace("\\", "/") + "/"
+                    zinfo = zipfile.ZipInfo(filename=rp)
+                    zinfo.date_time = time.localtime(os.stat(dp).st_mtime)[:6]
+                    zinfo.create_system = 3
+                    zinfo.external_attr = (0o040755) << 16
+                    z.writestr(zinfo, b"")
 
-                        is_exec = (
-                            rp.startswith("META-INF/bin/") or
-                            rp.endswith("update-binary") or
-                            rp == "META-INF/zstd" or
-                            rp.endswith(".sh")
-                        )
-                        if is_exec:
-                            zinfo.external_attr = (0o100755) << 16
-                        else:
-                            zinfo.external_attr = (0o100644) << 16
+                for f in files:
+                    fp = os.path.join(root, f)
+                    rp = os.path.relpath(fp, work_dir).replace("\\", "/")
+                    is_exec = (
+                        f in executable_names or
+                        rp.startswith("META-INF/bin/") or
+                        rp.endswith("update-binary") or
+                        rp == "META-INF/zstd" or
+                        rp.endswith(".sh")
+                    )
 
-                        with open(fp, "rb") as src_f, z.open(zinfo, mode="w", force_zip64=True) as dst_f:
-                            shutil.copyfileobj(src_f, dst_f, length=8 * 1024 * 1024)
+                    st = os.stat(fp)
+                    zinfo = zipfile.ZipInfo(filename=rp)
+                    zinfo.date_time = time.localtime(st.st_mtime)[:6]
+                    zinfo.compress_type = compression
+                    zinfo.create_system = 3
+                    zinfo.file_size = st.st_size
+
+                    if is_exec:
+                        zinfo.external_attr = (0o100755) << 16
+                    else:
+                        zinfo.external_attr = (0o100644) << 16
+
+                    with open(fp, "rb") as src_f, z.open(zinfo, mode="w", force_zip64=True) as dst_f:
+                        shutil.copyfileobj(src_f, dst_f, length=8 * 1024 * 1024)
 
     @classmethod
     def build(
         cls,
-        partitions: Dict[str, Dict[str, Any]],
         output_zip: str,
         device: str,
         firmware: str,
         codename: str,
+        imgs_dir: Optional[str] = None,
+        partitions: Optional[Dict[str, Dict[str, Any]]] = None,
         maintainer: str = "Mehraan",
         vbmeta_option: str = "skip",
         zstd_level: int = 1,
-        zip_level: int = 0
+        zip_level: int = 1,
+        include_fastboot: bool = True
     ) -> str:
-        """Executes full pipeline: zero-copy staging, parallel zstd, updater script, and fast ZIP."""
+        root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
+        # Ensure dependencies for current OS
+        current_plat = get_current_platform()
+        current_plat.ensure_dependencies()
+
+        host_zstd = get_host_zstd()
+
+        if partitions is None:
+            if not imgs_dir:
+                raise ValueError("Either imgs_dir or partitions dictionary must be provided.")
+            print(f"[*] Scanning partitions in: {imgs_dir}")
+            partitions = scan_partitions(imgs_dir, zstd_bin=host_zstd)
+
+        if not partitions:
+            raise ValueError(f"No valid partition images (.img or .img.zst) found.")
+
+        print(f"[+] Discovered {len(partitions)} partition(s): {', '.join(sorted(partitions.keys()))}")
+
         work_dir = os.path.abspath("zip_workspace")
+        staging_dir = os.path.abspath("temp_staging")
         if os.path.exists(work_dir):
-            shutil.rmtree(work_dir)
+            shutil.rmtree(work_dir, ignore_errors=True)
+        if os.path.exists(staging_dir):
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        os.makedirs(staging_dir, exist_ok=True)
         meta_dir = os.path.join(work_dir, "META-INF", "com", "google", "android")
         os.makedirs(meta_dir, exist_ok=True)
+
+        if vbmeta_option in ("disable", "enable"):
+            avb_mgr = AvbManager(vbmeta_option)
+            for p_name, p_info in partitions.items():
+                if p_name.startswith("vbmeta") and not p_info["is_zstd"] and os.path.isfile(p_info["path"]):
+                    try:
+                        staged_vb = os.path.join(staging_dir, f"{p_name}_staged.img")
+                        shutil.copy2(p_info["path"], staged_vb)
+                        if avb_mgr.patch_vbmeta_image(Path(staged_vb)):
+                            print(f"[*] Pre-patched {p_name} header flags -> {vbmeta_option.upper()}")
+                            partitions[p_name]["path"] = staged_vb
+                    except Exception as e:
+                        print(f"[!] Notice: {p_name} header patch skipped: {e}")
 
         compress_tasks = []
         super_specs = []
         tr_specs = []
         system_imgs = []
         firmware_imgs = []
+        super_imgs = []
 
         use_zstd = zstd_level > 0
-
         for name, info in partitions.items():
             src_path = info["path"]
             is_zst = info["is_zstd"]
+            raw_size = info.get("raw_size", 0)
+            if not raw_size:
+                if is_zst:
+                    raw_size = get_zstd_uncompressed_size(src_path, zstd_bin=host_zstd)
+                else:
+                    raw_size = os.path.getsize(src_path)
 
-            if is_zst:
-                raw_size = PartitionExtractor.get_zstd_uncompressed_size(src_path)
-            else:
-                raw_size = os.path.getsize(src_path)
+            ptype = info.get("type")
+            if not ptype:
+                from .partitions import classify_partition
+                ptype = classify_partition(name, src_path, is_zst)
 
-            if name in SUPER_PARTITIONS:
-                super_specs.append((name, raw_size))
-            elif name in SUPER_TR_PARTITIONS:
+            if ptype == "super_tr":
                 tr_specs.append((name, raw_size))
-            elif name in SYSTEMS:
+                super_imgs.append(name)
+            elif ptype == "super":
+                super_specs.append((name, raw_size))
+                super_imgs.append(name)
+            elif ptype == "system":
                 system_imgs.append(name)
             else:
                 firmware_imgs.append(name)
@@ -565,52 +242,52 @@ class FlashableBuilder:
             if use_zstd:
                 target_file = os.path.join(work_dir, f"{name}.img.zst")
                 if is_zst:
-                    # ZERO-COPY PASS-THROUGH (0.00 seconds)
-                    print(f"[*] [Zero-Copy] Pre-compressed: {name}.img.zst -> Pass-Through staged (Size: {raw_size} bytes).")
                     fast_stage_file(src_path, target_file)
                 else:
                     compress_tasks.append((name, src_path, target_file, zstd_level, raw_size))
             else:
-                # Raw uncompressed mode
                 target_file = os.path.join(work_dir, f"{name}.img")
                 fast_stage_file(src_path, target_file)
 
-        # Parallel Multi-Core ZSTD Compression for raw partitions
         if compress_tasks:
-            workers = min(len(compress_tasks), os.cpu_count() or 4)
-            print(f"[*] [Parallel Zstd Engine] Launching {workers} workers (Level {zstd_level} --ultra)...")
+            compress_tasks.sort(key=lambda t: t[4], reverse=True)
+            total_cpus = os.cpu_count() or 4
+            workers = min(len(compress_tasks), total_cpus)
+            threads_per_worker = max(1, total_cpus // workers)
+            tasks_with_threads = [
+                (t[0], t[1], t[2], t[3], t[4], threads_per_worker, host_zstd) for t in compress_tasks
+            ]
+            print(f"[*] Compressing {len(tasks_with_threads)} partition(s) with Zstandard (level {zstd_level}, {workers} workers x {threads_per_worker}T)...")
             with ProcessPoolExecutor(max_workers=workers) as executor:
-                futures = [executor.submit(compress_single_image_worker, t) for t in compress_tasks]
+                futures = [executor.submit(compress_single_image_worker, t) for t in tasks_with_threads]
                 for f in as_completed(futures):
                     name, raw_size = f.result()
-                    if name in SUPER_PARTITIONS:
-                        super_specs = [(n, raw_size if n == name else s) for n, s in super_specs]
-                    elif name in SUPER_TR_PARTITIONS:
+                    print(f"    [+] Compressed {name}.img -> {name}.img.zst")
+                    if any(n == name for n, _ in tr_specs):
                         tr_specs = [(n, raw_size if n == name else s) for n, s in tr_specs]
+                    elif any(n == name for n, _ in super_specs):
+                        super_specs = [(n, raw_size if n == name else s) for n, s in super_specs]
 
-        # Stage static recovery ARM64 zstd binary only when compression is used
-        script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # Stage recovery binaries
+        print("[*] Staging recovery binaries...")
         if use_zstd:
             zstd_rec_path = os.path.join(work_dir, "META-INF", "zstd")
-            zstd_src = os.path.join(script_dir, "bin", "zstd-arm64")
-            if not os.path.exists(zstd_src):
-                zstd_src = os.path.join(script_dir, "bin", "device", "zstd-arm64")
+            zstd_src = os.path.join(root_dir, "bin", "device", "zstd-arm64")
             if os.path.exists(zstd_src):
                 fast_stage_file(zstd_src, zstd_rec_path)
 
-        # Stage helper binaries (lptools for super/dynamic, avbctl for vbmeta toggle)
         bin_dir_target = os.path.join(work_dir, "META-INF", "bin")
-        bin_dir_src = os.path.join(script_dir, "bin", "device")
-
+        bin_dir_src = os.path.join(root_dir, "bin", "device")
         if os.path.exists(bin_dir_src):
             os.makedirs(bin_dir_target, exist_ok=True)
-            for b in ["lptools", "avbctl"]:
+            for b in ["lptools", "avbctl", "rapidflasher-arm64", "lpdump", "lpmake"]:
                 b_src = os.path.join(bin_dir_src, b)
                 if os.path.exists(b_src):
                     fast_stage_file(b_src, os.path.join(bin_dir_target, b))
 
-        # Write updater scripts
-        update_binary_content = cls.generate_update_binary(
+        # Write recovery update-binary and updater-script
+        print("[*] Generating recovery update-binary...")
+        update_binary_content = generate_update_binary(
             device, firmware, codename, super_specs, system_imgs, firmware_imgs, tr_specs,
             maintainer=maintainer, vbmeta_option=vbmeta_option, use_zstd=use_zstd
         )
@@ -623,12 +300,67 @@ class FlashableBuilder:
             pass
 
         with open(os.path.join(meta_dir, "updater-script"), "w", encoding="utf-8", newline="\n") as f:
-            f.write("# Dummy updater-script\n")
+            f.write("# SpeedFlasher installer\n")
 
-        # Native packaging
+        # Stage Fastboot installer scripts and binaries for all OS targets
+        if include_fastboot:
+            print("[*] Staging fastboot installer scripts and binaries...")
+            
+            # Windows fastboot assets
+            win_assets = WindowsPlatform.get_fastboot_assets()
+            if win_assets:
+                win_target = os.path.join(work_dir, "bin", "windows")
+                os.makedirs(win_target, exist_ok=True)
+                for wa in win_assets:
+                    fast_stage_file(wa, os.path.join(win_target, os.path.basename(wa)))
+
+            # Linux fastboot assets
+            lin_assets = LinuxPlatform.get_fastboot_assets()
+            if lin_assets:
+                lin_target = os.path.join(work_dir, "bin", "linux")
+                os.makedirs(lin_target, exist_ok=True)
+                for la in lin_assets:
+                    fast_stage_file(la, os.path.join(lin_target, os.path.basename(la)))
+
+            # Scripts
+            fb_win = WindowsInstaller.generate_batch_script(device, codename, firmware_imgs, system_imgs, super_imgs, use_zstd=use_zstd)
+            fb_lin = LinuxInstaller.generate_shell_script(device, codename, firmware_imgs, system_imgs, super_imgs, use_zstd=use_zstd)
+            fb_tmx = TermuxInstaller.generate_shell_script(device, codename, firmware_imgs, system_imgs, super_imgs, use_zstd=use_zstd)
+
+            with open(os.path.join(work_dir, "flash_windows.bat"), "w", encoding="utf-8", newline="\r\n") as f:
+                f.write(fb_win)
+            with open(os.path.join(work_dir, "flash_linux.sh"), "w", encoding="utf-8", newline="\n") as f:
+                f.write(fb_lin)
+            try:
+                os.chmod(os.path.join(work_dir, "flash_linux.sh"), 0o755)
+            except OSError:
+                pass
+            with open(os.path.join(work_dir, "flash_termux.sh"), "w", encoding="utf-8", newline="\n") as f:
+                f.write(fb_tmx)
+            try:
+                os.chmod(os.path.join(work_dir, "flash_termux.sh"), 0o755)
+            except OSError:
+                pass
+
+        # Package ZIP
         cls.package_zip(work_dir, output_zip, zip_level=zip_level)
         shutil.rmtree(work_dir, ignore_errors=True)
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
         size_mb = os.path.getsize(output_zip) / (1024 * 1024)
-        print(f"[+] [SUCCESS] Flashable ZIP package ready: {output_zip} ({size_mb:.2f} MB)")
-        return output_zip
+        print(f"[+] Package ready: {output_zip} ({size_mb:.2f} MB)")
+        return BuildResult(
+            output_zip,
+            output_zip=output_zip,
+            size_mb=size_mb,
+            device=device,
+            codename=codename,
+            firmware=firmware,
+            maintainer=maintainer,
+            vbmeta_option=vbmeta_option,
+            zstd_level=zstd_level,
+            zip_level=zip_level,
+            super_partitions=[p[0] for p in (super_specs + tr_specs)],
+            system_partitions=system_imgs,
+            firmware_partitions=firmware_imgs
+        )

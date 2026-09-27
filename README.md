@@ -1,251 +1,151 @@
-# ⚡ Flashable-Engine
+# SpeedFlasher (Flashable Maker)
 
-<div align="center">
+Universal Android Flashable Package Maker for Windows, Linux, and Android Termux.
 
-```
-============================================
-         Flashing Script By Mehraan
-============================================
+Converts partition image dumps (`.img` or `.img.zst`) into flashable recovery ZIPs (compatible with TWRP, OrangeFox, PBRP, and Lineage Recovery) and multi-platform Fastboot flasher scripts (`flash_windows.bat`, `flash_linux.sh`, `flash_termux.sh`).
 
-Device: Infinix GT 20 Pro
-Codename: X6871
-Version: 15.1.2.180SP05OP001PF001AZ
-Maintainer: Mehraan
-============================================
-```
+## Features
 
-**The Universal, High-Performance Android Flashable ROM Package Maker**  
-*Next-Gen Native Pipeline • Zero-Copy • Both-Slots Flashing • Smart AVB 2.0 Controls • Instant Cloud Upload*
+- Platform Support: Windows (x86_64), Linux (x86_64), and Android Termux (ARM64).
+- Recovery Installer: Self-contained POSIX `update-binary` supporting dynamic partitions (via `lptools`), slot detection (A/B and A-only), and in-memory streaming Zstandard decompression directly to block devices.
+- Fastboot Installers: Generates ready-to-run Fastboot flasher scripts for Windows, Linux, and Termux with bundled tools and on-the-fly partition decompression.
+- AVB 2.0 (Vbmeta) Control: Directly inspects and patches AVB0 header flags (`disable`, `enable`, or `skip`) across `vbmeta`, `vbmeta_system`, and `vbmeta_vendor`.
+- Partition Classification: Automatically identifies dynamic partitions (`system`, `vendor`, `product`, `system_ext`, etc.), direct bootchain images (`boot`, `dtbo`, `init_boot`, `vendor_boot`, `vbmeta`), and firmware images (`lk`, `logo`, `md1img`, `tee`, etc.).
+- Multi-Threaded Compression: Parallel Zstandard compression (levels 0-22) with configurable ZIP compression (levels 0-9) and standard Zip64 support.
+- Dependency Auto-Resolution: Automatically verifies and installs missing platform dependencies on startup.
+- Clean Output Summary: Displays a full breakdown of packaged partitions, installers, output path, and file size, with terminal window persistence.
 
----
-
-[![GitHub Actions](https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-blue?logo=githubactions&logoColor=white)](https://github.com/sheikhmehraann/Flashable-Maker/actions)
-[![Python Version](https://img.shields.io/badge/Python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-brightgreen?logo=python&logoColor=white)](https://python.org)
-[![Compression](https://img.shields.io/badge/Compression-Zstandard%20v1.5.6%20(Level%200--22)-orange?logo=zstandard&logoColor=white)](https://facebook.github.io/zstd/)
-[![Platform](https://img.shields.io/badge/Platform-Android%20A%2FB%20%7C%20Dynamic%20Partitions-purple?logo=android&logoColor=white)](https://source.android.com)
-[![Maintainer](https://img.shields.io/badge/Maintainer-Mehraan-cyan)](https://github.com/sheikhmehraann)
-
-</div>
-
----
-
-## 🌟 Key Features
-
-- ⚡ **10GB ROMs in Seconds**: Multi-core parallel ZSTD compression pipeline paired with direct stream-decompression to block devices at **>1.8 GB/s** during flashing.
-- 🔄 **Both-Slots Flashing Engine**: Automatically discovers and flashes all slotted partitions (`boot`, `vendor_boot`, `init_boot`, `lk`, `logo`, `dtbo`, `vbmeta`, `system`, `vendor`, etc.) to **both slots (`_a` and `_b`)** to prevent hard bricks.
-- 🔍 **Dynamic Block Device Discovery**: Universal `find_block_device()` resolver searching across `/dev/block/by-name`, `/dev/block/bootdevice/by-name`, and `/dev/block/platform/*/by-name` ensuring 100% compatibility across **MediaTek, Qualcomm, Samsung Exynos, and Unisoc**.
-- 🛡️ **Intelligent AVB 2.0 / Vbmeta Controls**:
-  - `enable`: Ensures AVB strict verification is enabled. If already enabled on the device, reports `Already Enabled (Skipped)`.
-  - `disable`: Disables dm-verity and verification. If already disabled, reports `Already Disabled (Skipped)`.
-  - `skip`: Omits AVB configuration and keeps stock vbmeta intact with zero binary overhead.
-- 🗜️ **Universal Recursive Extraction**: Automatically extracts and flattens any archive format (`.tar.zst`, `.zip`, `.7z`, `.rar`, `.tar.gz`, `.tar.xz`, `payload.bin`, `super.img`) containing partition images.
-- ☁️ **Turbo GoFile.io Cloud Integration**: Native high-speed upload powered by `gofile-fast-link-transfer` returning instant, publicly accessible download links.
-- 🤖 **1-Click GitHub Actions CI/CD**: Build multi-gigabyte custom ROM packages directly in the cloud from any remote download URL without using your local bandwidth or CPU.
-- 🎨 **Clean Monospace Recovery Interface**: Minimalist, professional console output designed for TWRP, OrangeFox, PBRP, and Lineage Recovery.
-
----
-
-## 📱 Live Recovery Flashing UI
-
-When flashing the generated package in custom recovery, users receive this clean, real-time output:
-
-```text
-============================================
-         Flashing Script By Mehraan
-============================================
-
-Device: Infinix GT 20 Pro
-Codename: X6871
-Version: 15.1.2.180SP05OP001PF001AZ
-Maintainer: Mehraan
-============================================
- 
-- Target Device    : Verified X6871
-- Active Boot Slot : Slot A
- 
-Patching firmware to both slots
-- Flashing partition lk to both slots
-- Flashing partition logo to both slots
- 
-Patching system
-- Flashing partition boot to both slots
-- Flashing partition dtbo to both slots
-- Flashing partition init_boot to both slots
-- Flashing partition vendor_boot to both slots
-- Flashing partition vbmeta to both slots
- 
-- Configuring AVB 2.0 (Vbmeta)
-  - AVB Status : Enabled
- 
-Patching super partitions
-- Flashing partition system_a
-- Flashing partition vendor_a
-- Flashing partition product_a
-- Flashing partition system_ext_a
- 
-============================================
-           Flashed Successfully!
-============================================
-```
-
----
-
-## 📂 Repository Structure
+## Project Structure
 
 ```text
 Flashable-Maker/
-└── Flashable-Engine/
-    ├── .github/
-    │   └── workflows/
-    │       └── build_flashable.yml    # 1-Click Cloud CI/CD Pipeline
-    ├── bin/
-    │   ├── device/                    # ARM64 recovery helper binaries
-    │   │   ├── avbctl                 # Native Android Verified Boot controller
-    │   │   ├── lptools                # Dynamic partition manager
-    │   │   ├── lpmake                 # Super image metadata builder
-    │   │   └── lpdump                 # Dynamic partition table dumper
-    │   └── zstd-arm64                 # Ultra-compact static ARM64 decompressor
-    ├── core/
-    │   ├── builder.py                 # Flashable ZIP builder & script generator
-    │   ├── downloader.py              # Multi-connection parallel downloader
-    │   └── extractor.py               # Recursive multi-archive unpacker
-    ├── gofile_transfer/               # High-throughput GoFile.io upload engine
-    │   ├── resolvers/                 # Link resolvers (GDrive, SourceForge, MediaFire)
-    │   ├── downloader.py              # 16-connection aria2c engine
-    │   └── uploader.py                # Turbo GoFile upload client
-    ├── main.py                        # Unified CLI Entry Point
-    ├── requirements.txt               # Python package dependencies
-    └── README.md
+├── bin/
+│   ├── device/                  # ARM64 recovery binaries (lptools, avbctl, zstd-arm64, etc.)
+│   ├── linux/                   # Linux host tools (fastboot, zstd, lpunpack, etc.)
+│   └── windows/                 # Windows host tools (fastboot.exe, zstd.exe, DLLs)
+├── core/
+│   ├── avb.py                   # AVB 2.0 vbmeta header parser and flag patcher
+│   ├── builder.py               # Package staging, multi-threaded compression, and ZIP packaging
+│   ├── partitions.py            # Partition image scanning and filesystem detection
+│   ├── scripts.py               # Shared utility scripts
+│   ├── linux/
+│   │   ├── installer.py         # Linux Fastboot shell script generator
+│   │   └── platform.py          # Linux dependency checker and tool resolver
+│   ├── recovery/
+│   │   └── updater.py           # Recovery POSIX update-binary shell generator
+│   ├── termux/
+│   │   ├── installer.py         # Termux Fastboot shell script generator
+│   │   └── platform.py          # Termux environment setup and package manager installer
+│   └── windows/
+│       ├── installer.py         # Windows Fastboot batch script generator
+│       └── platform.py          # Windows dependency checker and tool resolver
+├── output/                      # Default build target directory
+├── tests/
+│   └── test_speedflasher.py     # Multi-OS unit and integration test suite
+├── main.py                      # Interactive CLI and headless entrypoint
+├── requirements.txt             # Python requirements (zstandard)
+├── start.bat                    # Windows launcher
+├── start.sh                     # Linux launcher
+└── start_termux.sh              # Termux launcher
 ```
 
----
+## Quick Start
 
-## ☁️ 1-Click Cloud Building via GitHub Actions (Free & Zero Setup)
+### Windows
+Double-click `start.bat` or run:
+```cmd
+python main.py
+```
 
-You can build 10GB+ flashable ROM packages entirely in the cloud **without downloading anything to your PC, without using your personal internet data, and without installing any tools or Python!**
-
-### 🚀 Step-by-Step Guide (For Everyone):
-
-1. **🍴 Fork this Repository**:
-   - Click the [**Fork**](https://github.com/sheikhmehraann/Flashable-Maker/fork) button at the top-right corner of this repository to create your own personal copy.
-   - *Note for existing forks*: If you have an existing fork, click **"Sync fork"** -> **"Update branch"** at the top of your GitHub repository page to get the latest fixes.
-
-2. **⚡ Enable Workflows**:
-   - In your newly forked repository, navigate to the **Actions** tab.
-   - Click the green button: **"I understand my workflows, go ahead and enable them"**.
-
-3. **▶️ Run the Flashable Builder**:
-   - Select **"Build Flashable ROM Package (Flashable-Engine)"** from the left workflow list.
-   - Click the **"Run workflow"** button on the right.
-   - Fill in your ROM parameters:
-
-| Input Parameter | Description | Default / Example |
-| :--- | :--- | :--- |
-| **`rom_url`** | Direct link to **Images Archive** (`.zip`, `.rar`, `.7z`, `.tar.zst` containing `.img` files - Google Drive, SourceForge, Direct Link) | `https://drive.google.com/file/d/...` |
-| **`device_name`** | Full Device Marketing Name | `Infinix GT 20 Pro` |
-| **`device_codename`** | Hardware Board Codename | `X6871` |
-| **`rom_version`** | ROM / Firmware Version String | `15.1.2.180SP05OP001PF001AZ` |
-| **`maintainer`** | Maintainer / Author Name | `Mehraan` |
-| **`vbmeta_option`** | AVB 2.0 Action (`enable`, `disable`, `skip`) | `enable` |
-| **`zstd_level`** | ZSTD Compression Level (`0` to `22`) | `22` (Ultra-Max) |
-| **`zip_level`** | ZIP Deflate Level (`0` = Store, `9` = Max) | `9` |
-
-4. **📥 Instant GoFile.io Download Link**:
-   - Click **"Run workflow"**.
-   - Within 1–2 minutes, GitHub's high-speed cloud runner will download, unpack, build the flashable ZIP, and provide your **instant public GoFile.io download link** directly in the GitHub Job Summary!
-
----
-
-## 💻 Local Installation & Usage
-
-### 1. Requirements
-- Python 3.9+
-- `aria2`, `zstd`, `p7zip-full`, `libarchive-tools`, `curl`
-
-#### Linux (Ubuntu/Debian):
+### Linux
+Make the launcher executable and run:
 ```bash
-sudo apt update && sudo apt install -y aria2 zstd p7zip-full libarchive-tools curl python3-pip
-pip install -r requirements.txt
+chmod +x start.sh
+./start.sh
 ```
 
-#### Windows:
-Make sure Python is installed and added to PATH. Install dependencies:
-```powershell
-pip install -r requirements.txt
-```
-
----
-
-### 2. Command-Line Examples
-
-#### A. Build from Local Images Directory:
+### Android Termux
 ```bash
-python main.py \
-  --rom-dir "C:\Path\To\My-imgs" \
-  --device "Infinix GT 20 Pro" \
-  --codename "X6871" \
-  --version "15.1.2.180SP05OP001PF001AZ" \
-  --maintainer "Mehraan" \
-  --vbmeta "enable" \
-  --zstd-level 22 \
-  --zip-level 9 \
-  --output "C:\Path\To\Output"
+chmod +x start_termux.sh
+./start_termux.sh
 ```
 
-#### B. Build from Local Archive (`.zip`, `.tar.zst`, `payload.bin`):
-```bash
-python main.py \
-  --file "C:\Path\To\rom_dump.tar.zst" \
-  --device "Infinix GT 20 Pro" \
-  --codename "X6871" \
-  --version "15.1.2.180SP05OP001PF001AZ" \
-  --maintainer "Mehraan" \
-  --vbmeta "enable" \
-  --zstd-level 22 \
-  --output "./output"
+## Interactive Prompts
+
+When running without arguments, the tool interactively prompts for configuration:
+
+```text
+========================================================================
+                              SpeedFlasher
+========================================================================
+
+Enter IMGS Path : C:\path\to\dumped_images
+Devicename : Infinix GT 20 Pro
+Codename : X6871
+Version : 15.1.2.180
+AVB 2.0 (vbmeta) : disable
+Maintainer : Mehraan
+Ztsd Compression (0-22) : 1
+Zip Compression (0-9) : 1
 ```
 
-#### C. Build from Remote URL + Auto-Upload to GoFile:
+Once the build finishes, the tool prints a structured summary and waits for Enter before closing:
+
+```text
+========================================================================
+                      SpeedFlasher Build Summary
+========================================================================
+Device Name        : Infinix GT 20 Pro
+Codename           : X6871
+ROM Version        : 15.1.2.180
+Maintainer         : Mehraan
+AVB 2.0 (vbmeta)   : DISABLE
+ZSTD Compression   : Level 1
+ZIP Compression    : Level 1
+------------------------------------------------------------------------
+Partitions Packaged: Total 12
+  - Dynamic (Super): 4 (system, vendor, product, system_ext)
+  - Direct (System): 5 (boot, dtbo, init_boot, vendor_boot, vbmeta)
+  - Firmware/Boot  : 3 (lk, logo, md1img)
+------------------------------------------------------------------------
+Installers Generated:
+  - Recovery ZIP    : META-INF/com/google/android/update-binary
+  - Windows Fastboot: flash_windows.bat (with bundled tools)
+  - Linux Fastboot  : flash_linux.sh
+  - Termux Fastboot : flash_termux.sh
+------------------------------------------------------------------------
+Output File        : output/15.1.2.180-X6871-Flashable.zip
+Package Size       : 1845.20 MB
+Status             : SUCCESS
+========================================================================
+
+Press Enter to exit...
+```
+
+## Command Line Usage
+
+For automated environments, pass arguments directly:
+
 ```bash
 python main.py \
-  --url "https://direct-link.com/rom_package.zip" \
+  --imgs-path /path/to/images \
   --device "Infinix GT 20 Pro" \
   --codename "X6871" \
-  --version "15.1.2.180SP05OP001PF001AZ" \
+  --version "15.1.2.180" \
   --maintainer "Mehraan" \
-  --vbmeta "enable" \
-  --zstd-level 22 \
-  --zip-level 9 \
-  --upload "gofile" \
-  --output "./output"
+  --vbmeta disable \
+  --zstd-level 1 \
+  --zip-level 1
 ```
 
----
+## Running Tests
 
-## 🛠️ CLI Flags Reference
+Execute the comprehensive test suite across all OS modules:
 
-| Option | Flag | Description |
-| :--- | :--- | :--- |
-| **Images URL** | `--url <URL>` | Direct download link to Images Archive (`.zip`, `.rar`, `.7z`, `.tar.zst` containing `.img` files) |
-| **Local File** | `--file <PATH>` | Input local archive (`.zip`, `.tar.zst`, `.7z`, `payload.bin`, etc.) |
-| **Local Directory** | `--rom-dir <PATH>` | Input directory containing extracted `.img` or `.img.zst` files |
-| **Device Name** | `--device <STR>` | Target device marketing name (e.g. `Infinix GT 20 Pro`) |
-| **Codename** | `--codename <STR>` | Device board codename (e.g. `X6871`) |
-| **Version** | `--version <STR>` | Firmware / ROM version string |
-| **Maintainer** | `--maintainer <STR>` | Maintainer or author name (Default: `Mehraan`) |
-| **AVB Vbmeta** | `--vbmeta <MODE>` | `enable` (default), `disable`, or `skip` |
-| **ZSTD Level** | `--zstd-level <0-22>` | `0` = raw pass-through, `1` = ultra-fast, `22` = maximum compression |
-| **ZIP Level** | `--zip-level <0-9>` | `0` = store mode (line rate speed), `9` = maximum deflate compression |
-| **Cloud Upload** | `--upload <TARGET>` | `none` (default) or `gofile` |
-| **Output Path** | `--output <PATH>` | Destination directory or output `.zip` file path |
+```bash
+python -m unittest discover tests
+```
 
----
+## License
 
-## 📜 Credits & License
-
-- **Flashing Script & Architecture**: **Mehraan** ([@sheikhmehraann](https://github.com/sheikhmehraann))
-- **Dynamic Partition Management**: Powered by AOSP `lptools` & `avbctl`
-- **Compression Engine**: Facebook Zstandard (`zstd`)
-- **Cloud Upload Engine**: `gofile-fast-link-transfer`
-
-Licensed under the **Apache 2.0 License**. Free for personal and community ROM development.
+MIT License. See [LICENSE](file:///C:/Users/Admin/Videos/Github/Flashable-Maker/LICENSE) for details.

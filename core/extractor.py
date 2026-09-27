@@ -1,189 +1,156 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-⚡ core/extractor.py - High-Performance Multi-Threaded Unpacker & Scanner ⚡
-Handles instant archive decompression, recursive container unpacking, payload.bin
-extraction, sparse image parsing, and zero-copy partition discovery.
-"""
-
 import os
-import sys
 import shutil
-import struct
 import subprocess
+import sys
 from pathlib import Path
-from typing import Dict, Any, Tuple
+from typing import Dict, Optional
 
 ZSTD_FRAME_MAGIC = b"\x28\xb5\x2f\xfd"
 SPARSE_HEADER_MAGIC = b"\x3a\xff\x26\xed"
 
-# Auto-prepend bundled host tools to system PATH
-_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_HOST_BIN = os.path.join(_ROOT_DIR, "bin", "host")
-_ROOT_BIN = os.path.join(_ROOT_DIR, "bin")
-for _p in (_HOST_BIN, _ROOT_BIN):
-    if os.path.isdir(_p) and _p not in os.environ.get("PATH", ""):
-        os.environ["PATH"] = f"{_p}{os.pathsep}{os.environ.get('PATH', '')}"
+
+def find_7z_binary() -> Optional[str]:
+    for name in ("7z", "7za", "7z.exe"):
+        bin_path = shutil.which(name)
+        if bin_path:
+            return bin_path
+    windows_paths = [
+        r"C:\Program Files\7-Zip\7z.exe",
+        r"C:\Program Files (x86)\7-Zip\7z.exe",
+    ]
+    for p in windows_paths:
+        if os.path.isfile(p):
+            return p
+    linux_paths = [
+        "/usr/bin/7z",
+        "/usr/local/bin/7z",
+        "/data/data/com.termux/files/usr/bin/7z",
+    ]
+    for p in linux_paths:
+        if os.path.isfile(p):
+            return p
+    return None
+
 
 class PartitionExtractor:
-    """High-speed native unpacker and partition scanner."""
-
     @staticmethod
-    def is_zstd_file(file_path: str) -> bool:
-        """Inspects first 4 bytes for Zstandard frame header."""
-        if not os.path.isfile(file_path) or os.path.getsize(file_path) < 4:
-            return False
-        try:
-            with open(file_path, "rb") as f:
-                return f.read(4) == ZSTD_FRAME_MAGIC
-        except OSError:
-            return False
+    def detect_metadata(search_dir: str) -> Dict[str, str]:
+        meta = {"device": "", "codename": "", "version": ""}
+        prop_files = []
+        for root, _, files in os.walk(search_dir):
+            for file in files:
+                if file.endswith(".prop") or file == "build.prop":
+                    prop_files.append(os.path.join(root, file))
 
-    @staticmethod
-    def get_zstd_uncompressed_size(file_path: str) -> int:
-        """
-        Retrieves the exact total uncompressed partition byte size across ALL frames.
-        Supports single-frame, multi-threaded multi-frame (zstd -T0), and skippable frames.
-        Never estimates with arbitrary multipliers.
-        """
-        # Method 1: Native zstd CLI JSON query (instant multi-frame summary)
-        if shutil.which("zstd") or shutil.which("zstd.exe"):
-            z_bin = "zstd.exe" if shutil.which("zstd.exe") else "zstd"
+        for pf in prop_files:
             try:
-                import json
-                res = subprocess.run([z_bin, "-l", "--format=json", file_path], capture_output=True, text=True, check=True)
-                data = json.loads(res.stdout)
-                if isinstance(data, list) and data:
-                    decomp_sz = data[0].get("decompSize") or data[0].get("uncompressedSize")
-                    if decomp_sz and int(decomp_sz) > 0:
-                        return int(decomp_sz)
-            except Exception:
-                try:
-                    res = subprocess.run([z_bin, "-l", "-q", file_path], capture_output=True, text=True, check=True)
-                    for line in res.stdout.strip().splitlines():
-                        parts = line.strip().split()
-                        if len(parts) >= 4 and parts[3].isdigit():
-                            return int(parts[3])
-                except Exception:
-                    pass
+                with open(pf, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        line = line.strip()
+                        if "=" not in line or line.startswith("#"):
+                            continue
+                        k, v = line.split("=", 1)
+                        k, v = k.strip(), v.strip()
+                        if k in ("ro.product.device", "ro.build.product", "ro.product.board") and not meta["codename"]:
+                            meta["codename"] = v
+                        elif k in ("ro.product.model", "ro.product.marketname") and not meta["device"]:
+                            meta["device"] = v
+                        elif k in ("ro.build.display.id", "ro.build.version.incremental") and not meta["version"]:
+                            meta["version"] = v
+            except OSError:
+                pass
 
-        # Method 2: Multi-frame streaming byte counter (infallible 100% exact across all multi-frame & skippable zstd files)
-        try:
-            import zstandard
-            dctx = zstandard.ZstdDecompressor()
-            total = 0
-            with open(file_path, "rb") as f:
-                with dctx.stream_reader(f) as reader:
-                    while True:
-                        chunk = reader.read(4 * 1024 * 1024)
-                        if not chunk:
-                            break
-                        total += len(chunk)
-            if total > 0:
-                return total
-        except Exception:
-            pass
-
-        # Method 3: Python zstandard FrameParameters (Single Frame fallback)
-        try:
-            import zstandard
-            with open(file_path, "rb") as f:
-                header = f.read(1024)
-                params = zstandard.get_frame_parameters(header)
-                if params.content_size is not None and params.content_size > 0:
-                    return params.content_size
-        except Exception:
-            pass
-
-        return os.path.getsize(file_path)
+        if not meta["device"] and meta["codename"]:
+            meta["device"] = meta["codename"]
+        return meta
 
     @classmethod
     def unpack_payload_bin(cls, payload_path: str, output_dir: str):
-        """Extracts payload.bin partitions concurrently."""
-        print(f"[*] [Extractor] Unpacking payload.bin -> {output_dir}")
+        print(f"[*] Extracting payload.bin -> {output_dir}")
         os.makedirs(output_dir, exist_ok=True)
-        if shutil.which("payload-dumper-go"):
-            subprocess.run(["payload-dumper-go", "-threads", "0", "-o", output_dir, payload_path], check=True)
+        root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        bin_candidates = [
+            os.path.join(root_dir, "bin", "host", "payload-dumper-go.exe"),
+            os.path.join(root_dir, "bin", "host", "payload-extract"),
+            shutil.which("payload-dumper-go"),
+            shutil.which("payload-extract")
+        ]
+        payload_bin = next((b for b in bin_candidates if b and os.path.isfile(b) and (sys.platform.startswith("win") or os.access(b, os.X_OK))), None)
+
+        if payload_bin:
+            subprocess.run([payload_bin, payload_path, output_dir], check=True)
         else:
-            # Python payload_dumper module fallback
-            subprocess.run([sys.executable, "-m", "payload_dumper", "--out", output_dir, payload_path], check=True)
+            try:
+                subprocess.run([sys.executable, "-m", "payload_dumper", "--out", output_dir, payload_path], check=True)
+            except Exception as e:
+                print(f"[!] Warning: payload_dumper failed ({e}). Install payload_dumper or payload-dumper-go.")
 
     @classmethod
     def unpack_super_img(cls, super_path: str, output_dir: str):
-        """Unsparses and unpacks super.img logical partitions."""
-        print(f"[*] [Extractor] Unpacking super.img -> {output_dir}")
+        print(f"[*] Unpacking super.img -> {output_dir}")
         os.makedirs(output_dir, exist_ok=True)
+        root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        lpunpack_bin = os.path.join(root_dir, "bin", "host", "lpunpack")
+        if not (os.path.isfile(lpunpack_bin) and os.access(lpunpack_bin, os.X_OK)):
+            lpunpack_bin = shutil.which("lpunpack")
+
+        simg2img_bin = os.path.join(root_dir, "bin", "host", "simg2img")
+        if not (os.path.isfile(simg2img_bin) and os.access(simg2img_bin, os.X_OK)):
+            simg2img_bin = shutil.which("simg2img")
+
         target_super = super_path
-
-        # Check if file is a sparse image
         is_sparse = False
-        if os.path.isfile(super_path) and os.path.getsize(super_path) >= 4:
-            try:
-                with open(super_path, "rb") as sf:
-                    is_sparse = sf.read(4) == SPARSE_HEADER_MAGIC
-            except OSError:
-                pass
+        try:
+            with open(super_path, "rb") as f:
+                is_sparse = f.read(4) == SPARSE_HEADER_MAGIC
+        except OSError:
+            pass
 
-        # Unsparse only if sparse header is detected and simg2img is available
-        if is_sparse and shutil.which("simg2img"):
+        if is_sparse and simg2img_bin:
             unsparse_file = os.path.join(output_dir, "super.raw.img")
-            res = subprocess.run(["simg2img", super_path, unsparse_file], capture_output=True)
+            res = subprocess.run([simg2img_bin, super_path, unsparse_file], capture_output=True)
             if res.returncode == 0:
                 target_super = unsparse_file
 
-        if shutil.which("lpunpack"):
-            subprocess.run(["lpunpack", target_super, output_dir], check=True)
+        if lpunpack_bin:
+            subprocess.run([lpunpack_bin, target_super, output_dir], check=True)
             if target_super != super_path and os.path.exists(target_super):
                 os.remove(target_super)
         else:
-            print("[!] [Extractor] Notice: lpunpack not found in PATH; keeping super.img intact.")
+            print("[!] Warning: lpunpack not found, super.img left as-is.")
 
     @classmethod
     def extract_single(cls, archive_path: str, extract_dir: str):
-        """Native multi-threaded single archive unpacker supporting any container format."""
         os.makedirs(extract_dir, exist_ok=True)
-        lower_name = archive_path.lower()
-
-        # Sniff magic header bytes
+        lower = archive_path.lower()
         magic = b""
-        if os.path.isfile(archive_path) and os.path.getsize(archive_path) >= 6:
-            try:
-                with open(archive_path, "rb") as mf:
-                    magic = mf.read(6)
-            except OSError:
-                pass
+        try:
+            with open(archive_path, "rb") as f:
+                magic = f.read(6)
+        except OSError:
+            pass
 
-        is_zstd = magic.startswith(b"\x28\xb5\x2f\xfd") or lower_name.endswith((".tar.zst", ".tzst", ".zst"))
-        is_zip = magic.startswith(b"PK\x03\x04") or lower_name.endswith(".zip")
-        is_7z = magic.startswith(b"7z\xbc\xaf\x27\x1c") or lower_name.endswith(".7z")
-        is_rar = magic.startswith(b"Rar!\x1a\x07") or lower_name.endswith(".rar")
-        is_gzip = magic.startswith(b"\x1f\x8b") or lower_name.endswith((".tar.gz", ".tgz", ".gz"))
-        is_bzip2 = magic.startswith(b"BZh") or lower_name.endswith((".tar.bz2", ".tbz2", ".bz2"))
-        is_xz = magic.startswith(b"\xfd7zXZ\x00") or lower_name.endswith((".tar.xz", ".txz", ".xz"))
+        is_zstd = magic.startswith(ZSTD_FRAME_MAGIC) or lower.endswith((".tar.zst", ".tzst", ".zst"))
+        is_zip = magic.startswith(b"PK\x03\x04") or lower.endswith(".zip")
+        is_7z = magic.startswith(b"7z\xbc\xaf\x27\x1c") or lower.endswith(".7z")
+        is_rar = magic.startswith(b"Rar!\x1a\x07") or lower.endswith(".rar")
+        is_tar = lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.bz2", ".tbz2"))
+        seven_zip = find_7z_binary()
 
         if is_zstd:
             unpacked = False
-            # Pass 1: native tar with zstd decompressor
             if shutil.which("tar"):
                 try:
-                    subprocess.run(["tar", "-I", "zstd -T0", "-xf", archive_path, "-C", extract_dir], check=True)
-                    unpacked = True
-                except Exception:
-                    try:
-                        subprocess.run(["tar", "-xf", archive_path, "-C", extract_dir], check=True)
-                        unpacked = True
-                    except Exception:
-                        pass
-
-            # Pass 2: 7z CLI
-            if not unpacked and shutil.which("7z"):
-                try:
-                    subprocess.run(["7z", "x", "-mmt=on", "-y", f"-o{extract_dir}", archive_path], stdout=subprocess.DEVNULL, check=True)
+                    subprocess.run(["tar", "-I", "zstd", "-xf", archive_path, "-C", extract_dir], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     unpacked = True
                 except Exception:
                     pass
-
-            # Pass 3: Python zstandard + tarfile
+            if not unpacked and seven_zip:
+                try:
+                    subprocess.run([seven_zip, "x", "-y", f"-o{extract_dir}", archive_path], check=True, stdout=subprocess.DEVNULL)
+                    unpacked = True
+                except Exception:
+                    pass
             if not unpacked:
                 try:
                     import tarfile
@@ -196,20 +163,12 @@ class PartitionExtractor:
                 except Exception:
                     pass
 
-        elif is_7z or is_rar:
-            if shutil.which("7z"):
-                subprocess.run(["7z", "x", "-mmt=on", "-y", f"-o{extract_dir}", archive_path], stdout=subprocess.DEVNULL, check=True)
-            else:
-                try:
-                    import py7zr
-                    with py7zr.SevenZipFile(archive_path, mode='r') as z:
-                        z.extractall(path=extract_dir)
-                except Exception:
-                    pass
+        elif (is_7z or is_rar) and seven_zip:
+            subprocess.run([seven_zip, "x", "-y", f"-o{extract_dir}", archive_path], check=True, stdout=subprocess.DEVNULL)
 
         elif is_zip:
-            if shutil.which("7z"):
-                subprocess.run(["7z", "x", "-mmt=on", "-y", f"-o{extract_dir}", archive_path], stdout=subprocess.DEVNULL, check=True)
+            if seven_zip:
+                subprocess.run([seven_zip, "x", "-y", f"-o{extract_dir}", archive_path], check=True, stdout=subprocess.DEVNULL)
             elif shutil.which("unzip"):
                 subprocess.run(["unzip", "-q", "-o", archive_path, "-d", extract_dir], check=True)
             else:
@@ -217,7 +176,7 @@ class PartitionExtractor:
                 with zipfile.ZipFile(archive_path, "r") as z:
                     z.extractall(extract_dir)
 
-        elif is_gzip or is_bzip2 or is_xz or lower_name.endswith(".tar"):
+        elif is_tar:
             if shutil.which("tar"):
                 try:
                     subprocess.run(["tar", "-xf", archive_path, "-C", extract_dir], check=True)
@@ -229,24 +188,14 @@ class PartitionExtractor:
                 import tarfile
                 with tarfile.open(archive_path, "r:*") as t:
                     t.extractall(extract_dir)
+
         else:
-            if shutil.which("7z"):
-                subprocess.run(["7z", "x", "-mmt=on", "-y", f"-o{extract_dir}", archive_path], stdout=subprocess.DEVNULL, check=True)
-            else:
-                try:
-                    import zipfile
-                    with zipfile.ZipFile(archive_path, "r") as z:
-                        z.extractall(extract_dir)
-                except Exception:
-                    pass
+            if seven_zip:
+                subprocess.run([seven_zip, "x", "-y", f"-o{extract_dir}", archive_path], check=True, stdout=subprocess.DEVNULL)
 
     @classmethod
     def extract_recursive(cls, initial_archive: str, extract_dir: str, max_depth: int = 5):
-        """
-        Recursively extracts nested archives, payloads, and super images
-        while unlinking extracted containers to maintain minimal disk footprint.
-        """
-        print(f"[*] [Extractor] Starting recursive unpack of: {initial_archive}")
+        print(f"[*] Extracting archive: {initial_archive}")
         cls.extract_single(initial_archive, extract_dir)
 
         for depth in range(1, max_depth + 1):
@@ -256,61 +205,35 @@ class PartitionExtractor:
                     fp = os.path.join(root, f)
                     fl = f.lower()
 
-                    # Handle Payload.bin
                     if fl == "payload.bin":
                         cls.unpack_payload_bin(fp, os.path.join(root, "_payload_extracted"))
-                        os.remove(fp)
+                        try:
+                            os.remove(fp)
+                        except OSError:
+                            pass
                         nested_found = True
                         continue
 
-                    # Handle super.img
                     if fl == "super.img":
                         cls.unpack_super_img(fp, os.path.join(root, "_super_extracted"))
-                        os.remove(fp)
+                        try:
+                            os.remove(fp)
+                        except OSError:
+                            pass
                         nested_found = True
                         continue
 
-                    # Handle nested archives
                     if fl.endswith((".zip", ".tar", ".tar.gz", ".tgz", ".tar.xz", ".tar.zst", ".7z", ".rar")) and not fl.endswith(".img"):
-                        print(f"[*] [Extractor] [Nested L{depth}] Unpacking: {f}")
+                        print(f"[*] Nested archive (depth {depth}): {f}")
                         nested_dir = os.path.join(root, f"_unpacked_{f}")
                         try:
                             cls.extract_single(fp, nested_dir)
                             os.remove(fp)
                             nested_found = True
                         except Exception as e:
-                            print(f"[!] Warning: Failed unpacking nested archive {f}: {e}")
+                            print(f"[!] Warning: Failed unpacking {f}: {e}")
 
             if not nested_found:
                 break
 
-        print(f"[+] [Extractor] Extraction complete -> {extract_dir}")
-
-    @classmethod
-    def scan_partitions(cls, search_dir: str) -> Dict[str, Dict[str, Any]]:
-        """
-        Discovers all partition images (.img, .img.zst, .zst) and determines
-        their compression state.
-        """
-        partitions = {}
-        for root, _, files in os.walk(search_dir):
-            for file in files:
-                file_lower = file.lower()
-                file_path = os.path.join(root, file)
-
-                if file_lower.endswith(".img.zst") or file_lower.endswith(".zst"):
-                    base = file_lower.replace(".img.zst", "").replace(".zst", "")
-                    partitions[base] = {
-                        "path": file_path,
-                        "is_zstd": True,
-                        "filename": file
-                    }
-                elif file_lower.endswith(".img"):
-                    base = file_lower.replace(".img", "")
-                    if base not in partitions:
-                        partitions[base] = {
-                            "path": file_path,
-                            "is_zstd": cls.is_zstd_file(file_path),
-                            "filename": file
-                        }
-        return partitions
+        print(f"[+] Archive extracted: {extract_dir}")

@@ -28,3 +28,4 @@ extracted/
 *.img
 *.zst
 .DS_Store
+.refs/
