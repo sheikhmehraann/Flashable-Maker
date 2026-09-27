@@ -481,12 +481,40 @@ class FlashableBuilder:
             if compresslevel is not None:
                 kwargs["compresslevel"] = compresslevel
 
-            with zipfile.ZipFile(abs_output, "w", **kwargs) as z:
-                for root, _, files in os.walk(work_dir):
+            with zipfile.ZipFile(abs_output, "w", allowZip64=True, **kwargs) as z:
+                for root, dirs, files in os.walk(work_dir):
+                    for d in dirs:
+                        dp = os.path.join(root, d)
+                        rp = os.path.relpath(dp, work_dir).replace("\\", "/") + "/"
+                        zinfo = zipfile.ZipInfo(filename=rp)
+                        zinfo.date_time = time.localtime(os.stat(dp).st_mtime)[:6]
+                        zinfo.create_system = 3
+                        zinfo.external_attr = (0o040755) << 16
+                        z.writestr(zinfo, b"")
+
                     for f in files:
                         fp = os.path.join(root, f)
                         rp = os.path.relpath(fp, work_dir).replace("\\", "/")
-                        z.write(fp, rp)
+                        st = os.stat(fp)
+                        zinfo = zipfile.ZipInfo(filename=rp)
+                        zinfo.date_time = time.localtime(st.st_mtime)[:6]
+                        zinfo.compress_type = compression
+                        zinfo.create_system = 3
+                        zinfo.file_size = st.st_size
+
+                        is_exec = (
+                            rp.startswith("META-INF/bin/") or
+                            rp.endswith("update-binary") or
+                            rp == "META-INF/zstd" or
+                            rp.endswith(".sh")
+                        )
+                        if is_exec:
+                            zinfo.external_attr = (0o100755) << 16
+                        else:
+                            zinfo.external_attr = (0o100644) << 16
+
+                        with open(fp, "rb") as src_f, z.open(zinfo, mode="w", force_zip64=True) as dst_f:
+                            shutil.copyfileobj(src_f, dst_f, length=8 * 1024 * 1024)
 
     @classmethod
     def build(
